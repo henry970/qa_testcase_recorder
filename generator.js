@@ -66,13 +66,15 @@
     for (const ev of evs) {
       if (ev.type === "navigate") {
         if (cur && cur.url === ev.url) continue;
-        cur = { page: pageLabel(ev), url: ev.url, inputs: [], clicks: [], hasPw: false };
+        cur = { page: pageLabel(ev), url: ev.url, inputs: [], clicks: [], messages: [], hasPw: false };
         segs.push(cur);
       } else if (ev.type === "input") {
-        if (!cur) { cur = { page: firstPage(evs), url: "", inputs: [], clicks: [], hasPw: false }; segs.push(cur); }
+        if (!cur) { cur = { page: firstPage(evs), url: "", inputs: [], clicks: [], messages: [], hasPw: false }; segs.push(cur); }
         cur.inputs.push(ev); if (ev.sensitive) cur.hasPw = true;
       } else if (ev.type === "click" && cur) {
         cur.clicks.push(ev);
+      } else if (ev.type === "message" && cur) {
+        cur.messages.push(ev);
       }
     }
     return segs;
@@ -165,13 +167,17 @@
     let lastNav = null;
     let curTab = null;
     const seenTabs = new Set();
+    let lastType = null; // previous real event type (markers ignored)
     for (const ev of evs) {
       if (ev.type === "message" || ev.type === "feature") continue; // markers, not steps
       if (ev.type === "newtab") {
         seenTabs.add(ev.tabId); curTab = ev.tabId; lastNav = null;
         steps.push(stepText(ev));
+        lastType = ev.type;
         continue;
       }
+      const prevType = lastType;
+      lastType = ev.type;
       if (ev.tabId != null) {
         if (curTab == null) { curTab = ev.tabId; seenTabs.add(ev.tabId); }
         else if (ev.tabId !== curTab && seenTabs.has(ev.tabId)) {
@@ -183,6 +189,11 @@
         const p = shortPage(ev.page, ev.url);
         if (p === lastNav) continue;
         lastNav = p;
+        // a page that opened because of a click is a check, not an action
+        if (steps.length && (prevType === "click" || prevType === "key" || prevType === "newtab")) {
+          steps.push(`Verify the ${p} page opens.`);
+          continue;
+        }
       }
       const t = stepText(ev);
       if (steps.length && steps[steps.length - 1] === t) continue;
@@ -206,9 +217,19 @@
   function positiveCase(evs) {
     const where = firstPage(evs);
     const primary = primaryAction(evs);
-    const landed = landedPage(evs);
     const login = hasPassword(evs) && primary && /log|sign/i.test(primary.label);
-    const ok = successMsg(evs);
+    // for login, judge by what happened right after the login click — not by
+    // wherever the rest of the recorded journey ended up
+    let landed = landedPage(evs);
+    let ok = successMsg(evs);
+    if (login) {
+      const after = evs.slice(evs.indexOf(primary) + 1);
+      const nav = after.find((e) => e.type === "navigate");
+      landed = nav ? pageLabel(nav) : null;
+      const until = nav ? after.slice(0, after.indexOf(nav) + 3) : after; // messages around the redirect
+      const m = until.find((e) => e.type === "message" && e.level === "success");
+      ok = m ? m.text : null;
+    }
     // Avoid "the Login login" when the page itself is named Login/Sign in.
     const place = /login|sign ?in|log ?on/i.test(where) ? "" : `the ${where} `;
 
@@ -230,6 +251,70 @@
     return { module: mod, scenario, steps: login ? loginSteps(evs) : buildSteps(evs), expected, priority: login ? "Critical" : "High", kind: "positive", pass: !!ok };
   }
 
+  // ---- field helpers -------------------------------------------------------
+  const fieldKey = (f) => (f.label || "field").toLowerCase();
+  // one entry per field (the last value typed wins)
+  function uniqueInputs(inputs) {
+    const m = new Map();
+    inputs.forEach((f) => { m.delete(fieldKey(f)); m.set(fieldKey(f), f); });
+    return [...m.values()];
+  }
+  const rulesOf = (f) => (f.sel && f.sel.rules) || {};
+  function fieldType(f) {
+    const t = ((f.sel && f.sel.type) || "").toLowerCase();
+    const mode = (rulesOf(f).inputMode || "").toLowerCase();
+    if (f.sensitive || t === "password") return "password";
+    if (t === "email" || isEmailField(f)) return "email";
+    if (t === "tel" || /phone|mobile|\btel\b/i.test(f.label || "")) return "phone";
+    if (t === "url" || /\burl\b|website/i.test(f.label || "")) return "url";
+    if (/^(date|datetime-local|month|week|time)$/.test(t)) return "date";
+    if (t === "number" || mode === "numeric" || mode === "decimal" || isNumberField(f)) return "number";
+    if ((f.sel && f.sel.tag) === "select") return "select";
+    return "text";
+  }
+  const isAmount = (f) => /amount|price|qty|quantity|balance|total|cost|fee/i.test(f.label || "");
+  const recordedValue = (f) => (f.sensitive || f.value == null || f.value === "" ? `<valid ${f.label || "value"}>` : f.value);
+  const normT = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+
+  // Steps that re-enter the recorded form, changing only the field under test.
+  function formSteps(seg, target, how, submitLabel) {
+    const steps = [`Open ${seg.page}.`];
+    uniqueInputs(seg.inputs).forEach((f) => {
+      if (target && fieldKey(f) === fieldKey(target)) {
+        if (how.empty) steps.push(`Leave the "${f.label}" field empty.`);
+        else if (how.step) steps.push(how.step);
+        else steps.push(`Enter "${how.value}" into the "${f.label}" field.`);
+      } else {
+        steps.push(stepText(f));
+      }
+    });
+    steps.push(`Click the "${submitLabel}" button.`);
+    return steps;
+  }
+  // Test data block: one "Field: value" line per field.
+  function formData(seg, target, override) {
+    return uniqueInputs(seg.inputs)
+      .map((f) => `${f.label}: ${target && fieldKey(f) === fieldKey(target) ? override : recordedValue(f)}`)
+      .join("\n");
+  }
+  // Expected result for a blocked submit — quote the real error when one was seen.
+  // A message counts as this field's own validation text only if it names this
+  // field and no other one (so "Invalid email or password" — a login failure —
+  // is never quoted as the Email field's validation message).
+  const REQUIRED_WORDS = /required|empty|missing|blank|enter|provide|cannot be/i;
+  const FORMAT_WORDS = /invalid|format|valid|must|at least|at most|characters|only|digits|numbers/i;
+  function blocked(seg, f, fallback, kind) {
+    const label = normT(f && f.label);
+    const others = uniqueInputs(seg.inputs).map((x) => normT(x.label)).filter((l) => l && l !== label);
+    const words = kind === "required" ? REQUIRED_WORDS : FORMAT_WORDS;
+    const seen = seg.messages.find((m) => {
+      const t = normT(m.text);
+      return m.level === "error" && label && t.includes(label) && !others.some((o) => t.includes(o)) && words.test(m.text);
+    });
+    const stay = ` The form is not submitted and the user stays on ${seg.page}.`;
+    return (seen ? `The error "${seen.text}" is displayed.` : fallback) + stay;
+  }
+
   // ---- FIELD-VALIDATION cases (scoped per page/feature) ------------------
   function fieldCases(evs) {
     const cases = [];
@@ -239,55 +324,94 @@
       const mod = seg.hasPw ? "Login" : moduleFromPage(seg.page);
       const submit = seg.clicks.find((c) => SUBMIT_RE.test(c.label || "")) || seg.clicks[seg.clicks.length - 1];
       const submitLabel = submit ? submit.label : "Submit";
-      const page = seg.page;
+      const fields = uniqueInputs(seg.inputs);
+      const add = (f, scenario, how, data, expected, priority) => cases.push({
+        scenario, module: mod, kind: "field", priority: priority || "High",
+        steps: formSteps(seg, f, how, submitLabel),
+        data: formData(seg, f, data),
+        expected,
+      });
 
-      seg.inputs.forEach((f) => {
+      fields.forEach((f) => {
         const L = (f.label || "field").toLowerCase();
-        cases.push({
-          scenario: `Validate ${action} with an empty ${L} field.`,
-          steps: [`Open ${page}.`, `Leave the ${L} field empty and fill the other fields with valid data.`, `Click the "${submitLabel}" button.`],
-          module: mod,
-          expected: `A validation error indicates the ${L} field is required and the action is blocked.`,
-          priority: "High",
-          kind: "field",
-        });
-        if (isEmailField(f)) {
+        const type = fieldType(f);
+        const rules = rulesOf(f);
+
+        add(f, `Validate ${action} with an empty ${L} field.`, { empty: true }, "(empty)",
+          blocked(seg, f, `A message says the ${f.label} field is required.`, "required"));
+
+        if (type === "text") {
+          add(f, `Validate ${action} with only spaces in the ${L} field.`, { value: "   " }, `"   " (3 spaces)`,
+            blocked(seg, f, `Spaces alone are not accepted; the ${f.label} field is treated as empty and a required message is shown.`, "required"), "Medium");
+        }
+        if (type === "email") {
+          add(f, `Validate ${action} with an invalid ${L} format.`, { value: "user@@domain" },
+            `user@@domain (also try: user.domain.com, user@domain, @domain.com)`,
+            blocked(seg, f, `A message says the ${f.label} format is invalid.`));
+        } else if (type === "number") {
+          add(f, `Validate ${action} with a non-numeric ${L}.`, { value: "abc" }, "abc",
+            blocked(seg, f, `The ${f.label} field rejects letters, or a message says only numbers are allowed.`));
+          if (isAmount(f) && rules.min == null) {
+            add(f, `Validate ${action} with a negative ${L}.`, { value: "-1" }, "-1",
+              blocked(seg, f, `A message says the ${f.label} must be greater than zero.`));
+          }
+        } else if (type === "phone") {
+          add(f, `Validate ${action} with letters in the ${L} field.`, { value: "080abc1234" }, "080abc1234",
+            blocked(seg, f, `A message says the ${f.label} must contain only digits.`), "Medium");
+        } else if (type === "url") {
+          add(f, `Validate ${action} with an invalid ${L}.`, { value: "not a url" }, "not a url",
+            blocked(seg, f, `A message says the ${f.label} must be a valid URL.`), "Medium");
+        }
+
+        // boundary values from the field's own rules
+        if (rules.maxLength) {
+          const n = rules.maxLength;
           cases.push({
-            scenario: `Validate ${action} with an invalid ${L} format.`,
-            steps: [`Open ${page}.`, `Enter an invalid ${L} (e.g. "user@@domain").`, `Click the "${submitLabel}" button.`],
-            module: mod,
-            expected: `A validation error indicates the ${L} format is invalid and the action is blocked.`,
-            priority: "High",
-            kind: "field",
+            scenario: `Validate the ${L} field accepts at most ${n} characters.`, module: mod, kind: "field", priority: "Medium",
+            steps: [`Open ${seg.page}.`, `Enter exactly ${n} characters into the "${f.label}" field.`, `Try to type one more character (${n + 1} in total).`],
+            data: `${n} characters, then ${n + 1} characters`,
+            expected: `All ${n} characters are accepted. Character number ${n + 1} is blocked, or a message says the maximum is ${n} characters.`,
           });
-        } else if (isNumberField(f)) {
-          cases.push({
-            scenario: `Validate ${action} with a non-numeric ${L}.`,
-            steps: [`Open ${page}.`, `Enter a non-numeric value into the ${L} field.`, `Click the "${submitLabel}" button.`],
-            module: mod,
-            expected: `A validation error indicates only numeric input is allowed.`,
-            priority: "High",
-            kind: "field",
-          });
+        }
+        if (rules.minLength) {
+          const n = rules.minLength;
+          add(f, `Validate ${action} with a ${L} shorter than ${n} characters.`, { value: "a".repeat(Math.max(1, n - 1)) },
+            `${Math.max(1, n - 1)} characters`, blocked(seg, f, `A message says the ${f.label} must be at least ${n} characters.`));
+        }
+        if (rules.min != null && !isNaN(Number(rules.min))) {
+          const below = String(Number(rules.min) - 1);
+          add(f, `Validate ${action} with a ${L} below the minimum (${rules.min}).`, { value: below }, below,
+            blocked(seg, f, `A message says the ${f.label} must be at least ${rules.min}.`));
+        }
+        if (rules.max != null && !isNaN(Number(rules.max))) {
+          const above = String(Number(rules.max) + 1);
+          add(f, `Validate ${action} with a ${L} above the maximum (${rules.max}).`, { value: above }, above,
+            blocked(seg, f, `A message says the ${f.label} must be at most ${rules.max}.`));
+        }
+        if (rules.pattern && type !== "email") {
+          add(f, `Validate ${action} with a ${L} in the wrong format.`, { value: "!!invalid!!" }, `!!invalid!! (required pattern: ${rules.pattern})`,
+            blocked(seg, f, `A message explains the required ${f.label} format.`), "Medium");
         }
       });
 
-      if (seg.inputs.length === 2) {
-        const a = (seg.inputs[0].label || "field").toLowerCase(), b = (seg.inputs[1].label || "field").toLowerCase();
+      if (fields.length === 2) {
+        const a = fieldKey(fields[0]), b = fieldKey(fields[1]);
         cases.push({
           scenario: `Validate ${action} with both ${a} and ${b} empty.`,
-          steps: [`Open ${page}.`, `Leave both the ${a} and ${b} fields empty.`, `Click the "${submitLabel}" button.`],
+          steps: [`Open ${seg.page}.`, `Leave both the "${fields[0].label}" and "${fields[1].label}" fields empty.`, `Click the "${submitLabel}" button.`],
+          data: fields.map((f) => `${f.label}: (empty)`).join("\n"),
           module: mod,
-          expected: `Validation errors are shown for both fields and the action is blocked.`,
+          expected: `Required messages are shown for both fields. The form is not submitted and the user stays on ${seg.page}.`,
           priority: "High",
           kind: "field",
         });
-      } else if (seg.inputs.length > 2) {
+      } else if (fields.length > 2) {
         cases.push({
           scenario: `Validate ${action} with all fields empty.`,
-          steps: [`Open ${page}.`, `Leave all fields empty.`, `Click the "${submitLabel}" button.`],
+          steps: [`Open ${seg.page}.`, `Leave all fields empty.`, `Click the "${submitLabel}" button.`],
+          data: "All fields: (empty)",
           module: mod,
-          expected: `Validation errors are shown for all required fields and the action is blocked.`,
+          expected: `Required messages are shown for every required field. The form is not submitted and the user stays on ${seg.page}.`,
           priority: "High",
           kind: "field",
         });
@@ -381,31 +505,69 @@
   }
 
   // ---- NEGATIVE flow case ------------------------------------------------
-  function negativeCase(evs) {
+  const INVALID_SAMPLE = { email: "user@@domain", number: "abc", phone: "080abc1234", url: "not a url", date: "31/02/2020" };
+
+  function negativeCases(evs) {
     const page = firstPage(evs);
     const submit = primaryAction(evs);
     const err = errorBeforeNav(evs); // only an error shown on the login page itself
-    if (hasPassword(evs) && submit && /log|sign/i.test(submit.label)) {
-      return {
-        module: "Login",
-        scenario: `Validate users with invalid credentials cannot log in.`,
-        steps: [`Open ${page}.`, `Enter an invalid email/password.`, `Click the "${submit.label}" button.`],
-        expected: err ? `The error "${err}" is displayed and login is denied.` : `An appropriate error message is displayed and login is denied.`,
-        priority: "Critical",
-        kind: "negative",
-      };
+    if (!submit) return [];
+    const seg = pageSegments(evs).find((s) => s.inputs.length) || { page, inputs: [], messages: [] };
+    const fields = uniqueInputs(seg.inputs);
+
+    if (hasPassword(evs) && /log|sign/i.test(submit.label)) {
+      const user = fields.find((f) => !f.sensitive);
+      const pw = fields.find((f) => f.sensitive);
+      const uLabel = user ? user.label : "Username";
+      const pLabel = pw ? pw.label : "Password";
+      const uLow = uLabel.toLowerCase();
+      const isMail = user ? fieldType(user) === "email" : false;
+      const known = user && user.value ? user.value : `<registered ${uLabel}>`;
+      const unknown = isMail ? "not.registered.user@example.com" : "unregistered_user_9431";
+      const denied = err
+        ? `The error "${err}" is displayed, login is denied, and the user stays on ${page}.`
+        : `Login is denied, an error message is shown, and the user stays on ${page}.`;
+      const safe = " The message does not reveal which of the two values was wrong.";
+      return [
+        {
+          module: "Login", kind: "negative", priority: "Critical",
+          scenario: `Validate login with a valid ${uLow} and an incorrect password.`,
+          steps: [`Open ${page}.`, `Enter "${known}" into the "${uLabel}" field.`, `Enter an incorrect password into the "${pLabel}" field.`, `Click the "${submit.label}" button.`],
+          data: `${uLabel}: ${known}\n${pLabel}: WrongPass!123`,
+          expected: denied + safe,
+        },
+        {
+          module: "Login", kind: "negative", priority: "High",
+          scenario: `Validate login with an unregistered ${uLow}.`,
+          steps: [`Open ${page}.`, `Enter "${unknown}" into the "${uLabel}" field.`, `Enter any password into the "${pLabel}" field.`, `Click the "${submit.label}" button.`],
+          data: `${uLabel}: ${unknown}\n${pLabel}: AnyPass!123`,
+          expected: denied + safe,
+        },
+      ];
     }
-    if (submit) {
-      return {
-        module: moduleFromLabel(submit.label) || "General",
-        scenario: `Validate "${submit.label}" is rejected with invalid input.`,
-        steps: [`Open ${page}.`, `Enter invalid data in the fields.`, `Click the "${submit.label}" button.`],
-        expected: err ? `The error "${err}" is displayed and the action is blocked.` : `An appropriate error message is displayed and the action is blocked.`,
-        priority: "High",
-        kind: "negative",
-      };
+
+    // other forms: put an invalid value into every typed field, keep the rest valid
+    const typed = fields.filter((f) => INVALID_SAMPLE[fieldType(f)]);
+    const steps = [`Open ${seg.page || page}.`];
+    if (typed.length) {
+      fields.forEach((f) => {
+        const bad = INVALID_SAMPLE[fieldType(f)];
+        steps.push(bad ? `Enter "${bad}" into the "${f.label}" field.` : stepText(f));
+      });
+    } else {
+      steps.push(fields.length ? `Leave the "${fields[0].label}" field empty and fill the rest with the recorded values.` : "Enter invalid data in the fields.");
     }
-    return null;
+    steps.push(`Click the "${submit.label}" button.`);
+    return [{
+      module: moduleFromLabel(submit.label) || "General",
+      scenario: `Validate "${submit.label}" is rejected with invalid input.`,
+      steps,
+      data: fields.map((f) => `${f.label}: ${INVALID_SAMPLE[fieldType(f)] || (typed.length || f !== fields[0] ? recordedValue(f) : "(empty)")}`).join("\n"),
+      expected: (err ? `The error "${err}" is displayed and the action is blocked.` : `Error messages point to the invalid fields and the action is blocked.`) +
+        ` No data is saved and the user stays on ${seg.page || page}.`,
+      priority: "High",
+      kind: "negative",
+    }];
   }
 
   // ---- suite -------------------------------------------------------------
@@ -419,7 +581,20 @@
     const covered = /remember|forgot\s*password|reset\s*password|show\s*password|hide\s*password/i;
     const out = [];
     let curPage = page;
-    evs.forEach((ev) => {
+    // What the recorder saw right after an action: a new page, a new tab, or a message.
+    const ACTIONS = ["click", "input", "select", "toggle", "key"];
+    const outcomeAfter = (i) => {
+      for (let j = i + 1; j < evs.length; j++) {
+        const e = evs[j];
+        if (ACTIONS.includes(e.type)) break;
+        if (e.type === "newtab") return { newtab: true };
+        if (e.type === "navigate" && pageLabel(e) !== curPage) return { page: pageLabel(e) };
+        if (e.type === "message") return { msg: e.text, level: e.level };
+      }
+      return null;
+    };
+    const describe = (o) => (o.newtab ? "a new tab opens" : o.page ? `the ${o.page} page opens` : `the message "${o.msg}" is displayed`);
+    evs.forEach((ev, i) => {
       if (ev.type === "navigate") { curPage = pageLabel(ev); return; }
       const label = (ev.label || "").trim();
       if (!label) return;
@@ -436,17 +611,21 @@
         key = `click:${kind}:${label.toLowerCase()}`;
         scenario = `Validate the "${label}" ${kind}.`;
         steps = [`Open ${curPage}.`, `Click the "${label}" ${kind}.`];
-        expected = `The "${label}" ${kind} responds and performs its intended action.`;
+        const o = outcomeAfter(i);
+        expected = o
+          ? `After clicking "${label}", ${describe(o)}.`
+          : `The "${label}" ${kind} is visible and enabled, and clicking it performs its action without errors.`;
       } else if (ev.type === "toggle") {
         key = `toggle:${label.toLowerCase()}`;
         scenario = `Validate the "${label}" checkbox.`;
-        steps = [`Open ${curPage}.`, `Check and uncheck the "${label}" checkbox.`];
-        expected = `The "${label}" checkbox can be toggled on and off, and its state is applied.`;
+        steps = [`Open ${curPage}.`, `Click the "${label}" checkbox.`, `Click it again.`];
+        expected = `The first click ${ev.checked ? "checks" : "unchecks"} "${label}" and the second click reverses it. The setting is applied when the form is used.`;
       } else if (ev.type === "select") {
         key = `select:${label.toLowerCase()}`;
         scenario = `Validate the "${label}" dropdown.`;
-        steps = [`Open ${curPage}.`, `Open the "${label}" dropdown and choose an option.`];
-        expected = `Options can be selected in "${label}" and the choice is applied.`;
+        steps = [`Open ${curPage}.`, `Open the "${label}" dropdown.`, `Select "${ev.value}".`];
+        const o = outcomeAfter(i);
+        expected = `The "${label}" dropdown lists its options and shows "${ev.value}" as selected` + (o ? `; ${describe(o)}.` : ".");
       } else {
         return;
       }
@@ -470,19 +649,53 @@
     return out;
   }
 
+  // ---- preconditions / test data / type for every case --------------------
+  const TYPE_OF = {
+    positive: "Positive", negative: "Negative", field: "Validation", feature: "Functional",
+    element: "Functional (UI)", flow: "End-to-end", ai: "AI suggested",
+  };
+  function enrich(cases, evs) {
+    const first = evs.find((e) => e.type === "navigate");
+    let origin = "";
+    try { origin = first ? new URL(first.url).origin : ""; } catch (e) { origin = ""; }
+    const login = hasPassword(evs);
+    const segs = pageSegments(evs);
+    const loginSeg = segs.find((s) => s.hasPw);
+    const reach = origin ? `The application is reachable at ${origin}.` : "The application under test is reachable.";
+    const allData = uniqueInputs(evs.filter((e) => e.type === "input"))
+      .map((f) => `${f.label}: ${recordedValue(f)}`).join("\n");
+
+    cases.forEach((c) => {
+      c.type = c.type || TYPE_OF[c.kind] || "Functional";
+      c.priority = c.priority || "Medium";
+      if (!c.preconditions) {
+        const pre = [reach];
+        if (login && c.module === "Login") pre.push(c.kind === "negative" ? "A registered, active user account exists." : "A registered, active user account is available.", "The user is logged out.");
+        else if (login) pre.push("The user is logged in with a valid account.");
+        if (c.kind === "positive" && !login && allData) pre.push("The test data below is valid for this environment.");
+        c.preconditions = pre.join("\n");
+      }
+      if (c.data == null) {
+        if (c.kind === "positive") c.data = login && loginSeg ? formData(loginSeg, null) : allData;
+        else c.data = "";
+      }
+    });
+    return cases;
+  }
+
   function generateSuite(events, opts = {}) {
     const evs = (events || []).filter(Boolean);
     const { fieldValidation = true, flowValidation = true, negatives = true, elements = true } = opts;
     const cases = [];
     cases.push(positiveCase(evs));                          // valid
-    if (negatives) { const n = negativeCase(evs); if (n) cases.push(n); } // invalid credentials
+    if (negatives) cases.push(...negativeCases(evs));       // wrong password / unknown user / invalid input
     if (fieldValidation) {
       cases.push(...fieldCases(evs));                       // empty / invalid format / both empty
       cases.push(...loginFeatureCases(evs));                // masking, show-hide, remember me, forgot password
     }
     if (elements) cases.push(...elementCases(evs));          // one case per button / menu / checkbox
     if (flowValidation) cases.push(...flowCases(evs));      // page loads / end-to-end
-    return dedupeCases(cases);                              // never emit duplicate scenarios
+    return enrich(dedupeCases(cases), evs);                 // never emit duplicate scenarios
   }
 
   // backward-compatible single positive case

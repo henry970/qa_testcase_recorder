@@ -19,16 +19,21 @@ const els = {
 
 const DEFAULT_STATUS = ["Pass", "Fail", "Not Tested", "Pending"];
 const ROLES = [
-  ["id", "Auto ID"], ["module", "Module / Feature"], ["scenario", "Scenario"], ["steps", "Test Steps"],
-  ["expected", "Expected Result"], ["actual", "Actual Result"], ["status", "Status / Priority"], ["blank", "Blank (manual)"],
+  ["id", "Auto ID"], ["module", "Module / Feature"], ["scenario", "Scenario"], ["preconditions", "Preconditions"],
+  ["steps", "Test Steps"], ["data", "Test Data"], ["expected", "Expected Result"], ["actual", "Actual Result"],
+  ["priority", "Priority"], ["type", "Test Type"], ["status", "Status"], ["blank", "Blank (manual)"],
 ];
+const PRIORITY_OPTIONS = ["Critical", "High", "Medium", "Low"];
 const DEFAULT_COLUMNS = () => [
   { id: "c_id", name: "TC ID", role: "id" },
   { id: "c_mod", name: "Test Module", role: "module" },
   { id: "c_scn", name: "Test Scenario", role: "scenario" },
+  { id: "c_pre", name: "Preconditions", role: "preconditions" },
   { id: "c_stp", name: "Test Steps", role: "steps" },
+  { id: "c_dat", name: "Test Data", role: "data" },
   { id: "c_exp", name: "Expected Result", role: "expected" },
   { id: "c_act", name: "Actual Result", role: "actual" },
+  { id: "c_pri", name: "Priority", role: "priority", options: PRIORITY_OPTIONS.slice() },
   { id: "c_sts", name: "Status", role: "status" },
   { id: "c_col1", name: "Column 1", role: "blank" },
 ];
@@ -139,6 +144,10 @@ function contentForRole(role, c) {
     case "scenario": return c.scenario;
     case "steps": return c.steps.join("\n");
     case "expected": return c.expected;
+    case "preconditions": return c.preconditions || "";
+    case "data": return c.data || "";
+    case "priority": return c.priority || "";
+    case "type": return c.type || "";
     case "status": return (c.pass && state.autoPass) ? passStatus() : defaultStatus();
     default: return "";
   }
@@ -176,7 +185,11 @@ function renderColumns() {
       const o = document.createElement("option"); o.value = val; o.textContent = label;
       if (val === col.role) o.selected = true; role.appendChild(o);
     });
-    role.addEventListener("change", () => { state.columns[i].role = role.value; save({ columns: state.columns }); renderColumns(); });
+    role.addEventListener("change", () => {
+      state.columns[i].role = role.value;
+      if (role.value === "priority" && !(state.columns[i].options || []).length) state.columns[i].options = PRIORITY_OPTIONS.slice();
+      save({ columns: state.columns }); renderColumns();
+    });
 
     const up = document.createElement("button"); up.className = "move"; up.textContent = "↑"; up.title = "Move up";
     up.addEventListener("click", () => { if (i > 0) { swap(i, i - 1); } });
@@ -192,8 +205,8 @@ function renderColumns() {
     li.append(name, role, up, down, del);
     els.colList.appendChild(li);
 
-    // preset dropdown options for a Blank column (e.g. Module = Login, Dashboard…)
-    if (col.role === "blank") {
+    // preset dropdown options for a Blank or Priority column (e.g. Module = Login, Dashboard…)
+    if (col.role === "blank" || col.role === "priority") {
       const optLi = document.createElement("li"); optLi.className = "col-opts";
       const oi = document.createElement("input");
       oi.placeholder = "dropdown options (comma-separated, optional)";
@@ -416,9 +429,9 @@ function renderBatch(cases) {
         if (col.options && col.options.length) {
           ctrl = document.createElement("select");
           [""].concat(col.options).forEach((o) => { const op = document.createElement("option"); op.textContent = o; ctrl.appendChild(op); });
-        } else if (col.role === "steps" || col.role === "expected") {
+        } else if (["steps", "expected", "preconditions", "data"].includes(col.role)) {
           ctrl = document.createElement("textarea");
-          ctrl.rows = col.role === "steps" ? Math.min(6, c.steps.length + 1) : 2;
+          ctrl.rows = col.role === "steps" ? Math.min(6, c.steps.length + 1) : Math.min(4, String(contentForRole(col.role, c) || "").split("\n").length + 1);
         } else {
           ctrl = document.createElement("input");
         }
@@ -757,6 +770,11 @@ async function aiSuggest() {
       scenario: String(c.scenario || "").trim(),
       steps: Array.isArray(c.steps) ? c.steps.map(String) : String(c.steps || "").split("\n").filter(Boolean),
       expected: String(c.expected || "").trim(),
+      preconditions: Array.isArray(c.preconditions) ? c.preconditions.join("\n") : String(c.preconditions || "").trim(),
+      data: Array.isArray(c.testData) ? c.testData.join("\n") : String(c.testData || c.data || "").trim(),
+      priority: PRIORITY_OPTIONS.find((p) => p.toLowerCase() === String(c.priority || "").toLowerCase()) || "Medium",
+      type: String(c.type || "AI suggested").trim(),
+      module: String(c.module || "").trim(),
       kind: "ai",
     })).filter((c) => c.scenario);
     if (!cases.length) { els.statusLine.textContent = "Claude replied, but no usable cases were parsed. Add an app description and try again."; return; }
@@ -894,7 +912,7 @@ async function exportXLSX() {
   const aoa = [state.columns.map((c) => c.name)];
   state.testcases.forEach((tc, i) => aoa.push(state.columns.map((c) => cellFor(tc, c, i))));
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  const widthFor = (role) => ({ id: 10, scenario: 42, steps: 52, expected: 40, actual: 40, status: 12 }[role] || 20);
+  const widthFor = (role) => ({ id: 10, scenario: 42, steps: 52, expected: 40, actual: 40, status: 12, preconditions: 36, data: 32, priority: 10, type: 14 }[role] || 20);
   ws["!cols"] = state.columns.map((c) => ({ wch: widthFor(c.role) }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Test Cases");
@@ -930,10 +948,14 @@ function guessRole(name) {
   const n = String(name).toLowerCase();
   if (/expected/.test(n)) return "expected";
   if (/actual/.test(n)) return "actual";
+  if (/pre-?\s*condition|prerequisite/.test(n)) return "preconditions";
+  if (/test\s*data|input\s*data|^data$/.test(n)) return "data";
   if (/step/.test(n)) return "steps";
+  if (/test\s*type|case\s*type|^type$/.test(n)) return "type";
   if (/scenario|title|description|test\s*case/.test(n)) return "scenario";
   if (/\btc\s*id\b|test\s*id|case\s*id|^id$|\bid\b/.test(n)) return "id";
-  if (/status|priority|severity/.test(n)) return "status";
+  if (/priority|severity/.test(n)) return "priority";
+  if (/status/.test(n)) return "status";
   if (/module|feature|area|component|epic/.test(n)) return "module";
   return "blank";
 }

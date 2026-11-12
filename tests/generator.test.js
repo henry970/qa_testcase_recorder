@@ -268,3 +268,74 @@ test("Cypress visits the new tab's URL and reaches into the iframe", () => {
   assert.match(code, /cy\.get\('iframe\[name="payframe"\]'\)\.its\('0\.contentDocument\.body'\)\.should\('not\.be\.empty'\)\.then\(cy\.wrap\)\.find\('\[name="cardname"\]'\)\.type\("Ada"\)/);
   assert.match(code, /Switched back to the earlier tab\.\n    cy\.visit\("https:\/\/shop\.example\.com\/cart"\);/);
 });
+
+// ---- test-case quality --------------------------------------------------------
+function richLogin() {
+  return [
+    { type: "navigate", url: "https://portal.example.com/login", page: "Control Portal" },
+    { type: "input", label: "Email", value: "admin@corp.com", sel: { tag: "input", type: "email", rules: { required: true, maxLength: 50 } } },
+    { type: "input", label: "Password", value: null, sensitive: true, sel: { tag: "input", type: "password", rules: { minLength: 8 } } },
+    { type: "click", kind: "button", label: "Login", sel: { tag: "button" } },
+    { type: "message", level: "error", text: "Invalid email or password" },
+    { type: "message", level: "error", text: "Email is required" },
+    { type: "click", kind: "button", label: "Login", sel: { tag: "button" } },
+    { type: "message", level: "success", text: "Welcome back" },
+    { type: "navigate", url: "https://portal.example.com/dashboard", page: "Dashboard" },
+    { type: "select", label: "Period", value: "Last 30 days", sel: { tag: "select" } },
+    { type: "click", kind: "link", label: "Transactions", sel: { tag: "a" } },
+    { type: "navigate", url: "https://portal.example.com/transactions", page: "Transactions" },
+  ];
+}
+const byScenario = (cases, re) => cases.find((c) => re.test(c.scenario));
+
+test("login negatives: wrong password and unregistered user, with real values", () => {
+  const cases = G.generateSuite(richLogin(), { flowValidation: false });
+  const wrong = byScenario(cases, /valid email and an incorrect password/);
+  const unknown = byScenario(cases, /unregistered email/);
+  assert.ok(wrong && unknown);
+  assert.ok(wrong.steps.includes('Enter "admin@corp.com" into the "Email" field.'));
+  assert.match(wrong.expected, /"Invalid email or password"/);
+  assert.match(unknown.data, /not\.registered\.user@example\.com/);
+});
+
+test("field cases quote only that field's own validation message", () => {
+  const cases = G.generateSuite(richLogin(), { flowValidation: false });
+  assert.match(byScenario(cases, /empty email field/).expected, /"Email is required"/);
+  // the shared login error names both fields, so it is never used for one field
+  assert.doesNotMatch(byScenario(cases, /empty password field/).expected, /Invalid email or password/);
+  assert.doesNotMatch(byScenario(cases, /invalid email format/).expected, /Invalid email or password/);
+});
+
+test("field cases use the recorded values and list test data", () => {
+  const emptyPw = byScenario(G.generateSuite(richLogin(), { flowValidation: false }), /empty password field/);
+  assert.deepStrictEqual(emptyPw.steps, [
+    "Open Login.", 'Enter "admin@corp.com" into the "Email" field.', 'Leave the "Password" field empty.', 'Click the "Login" button.',
+  ]);
+  assert.strictEqual(emptyPw.data, "Email: admin@corp.com\nPassword: (empty)");
+});
+
+test("boundary cases come from the field's real rules", () => {
+  const s = scenarios(G.generateSuite(richLogin(), { flowValidation: false }));
+  assert.ok(s.includes("Validate the email field accepts at most 50 characters."));
+  assert.ok(s.includes("Validate login with a password shorter than 8 characters."));
+});
+
+test("element expectations describe what actually happened", () => {
+  const cases = G.generateSuite(richLogin(), { flowValidation: false });
+  assert.strictEqual(byScenario(cases, /"Transactions" link/).expected, 'After clicking "Transactions", the Transactions page opens.');
+  assert.match(byScenario(cases, /"Period" dropdown/).expected, /"Last 30 days" as selected/);
+});
+
+test("positive login lands on the page right after login, with a verify step", () => {
+  const pos = G.generateSuite(richLogin(), { flowValidation: false }).find((c) => c.kind === "positive");
+  assert.match(pos.expected, /"Welcome back".*Dashboard/);
+  assert.doesNotMatch(pos.expected, /Transactions/);
+  assert.strictEqual(pos.steps[pos.steps.length - 1], "Verify the Dashboard page opens.");
+});
+
+test("every case has preconditions, a type and a priority", () => {
+  const cases = G.generateSuite(richLogin(), { flowValidation: false });
+  assert.ok(cases.every((c) => c.preconditions && c.type && c.priority));
+  assert.match(byScenario(cases, /"Transactions" link/).preconditions, /logged in/);
+  assert.match(byScenario(cases, /empty email field/).preconditions, /logged out/);
+});

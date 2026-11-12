@@ -86,15 +86,22 @@ reorder (↑ ↓), or delete columns. Each column has a **role** that tells the
 generator what belongs there:
 
 - **Auto ID** — filled with `PREFIX_NNN`, incrementing per row
+- **Module / Feature** — the feature the case exercises (Login, Cart, Transactions…)
 - **Scenario** — the generated test scenario
+- **Preconditions** — the state needed before step 1 (e.g. "The user is logged in with a valid account")
 - **Test Steps** — the numbered steps (auto-numbered on export)
+- **Test Data** — the exact values to use, one `Field: value` per line
 - **Expected Result** — the generated expected result
+- **Actual Result** — filled in while testing (or by a replay)
+- **Priority** — Critical / High / Medium / Low, as a dropdown
+- **Test Type** — Positive, Negative, Validation, Functional, End-to-end…
 - **Status** — an editable picker; options default to Pass / Fail / Not Tested / Pending and are configurable in settings
 - **Blank (manual)** — an empty column you fill in yourself
 
 Whatever table you define drives everything: the batch review fields, the saved
 list, and the exported CSV all follow your columns and their order. "Reset"
-restores the default six-column layout.
+restores the default layout: TC ID, Test Module, Test Scenario, Preconditions,
+Test Steps, Test Data, Expected Result, Actual Result, Priority, Status, Column 1.
 
 ## Running tests & logging Actual Result
 
@@ -173,6 +180,34 @@ The **Excel** export also gains a second **Summary** sheet with the same totals
 and percentages (numbers only — spreadsheets from the free engine can't embed a
 chart, but the HTML report has the visual).
 
+
+## How the generated cases are written
+
+- **Real values, not placeholders.** A field-validation case re-enters the form
+  exactly as you recorded it and changes only the field under test, so the steps
+  read `Enter "admin@corp.com" into the "Email" field.` and not "fill the other
+  fields with valid data".
+- **Real messages.** When the recorder saw a field's own error (e.g. "Email is
+  required"), that exact text becomes the expected result. A shared error that
+  names several fields, such as "Invalid email or password", is used only for the
+  login negatives, never as one field's validation message.
+- **Real limits.** The recorder captures each field's `required`, `maxlength`,
+  `minlength`, `min`, `max` and `pattern`, and turns them into boundary cases,
+  e.g. "accepts at most 50 characters" or "below the minimum (1)".
+- **Type-aware checks.** Email gets bad formats, numbers get letters (and negative
+  values for amounts), phones get letters, plain text gets a spaces-only check.
+- **Two login negatives.** These are "valid user, wrong password" and "unregistered
+  user". Both expect a message that doesn't reveal which value was wrong.
+- **Observed outcomes.** A button or link case says what really happened after
+  the click: the page that opened, the message shown, or a new tab.
+- **Checks, not just actions.** A page that opens because of a click becomes
+  "Verify the Dashboard page opens."
+- **Preconditions, test data, priority and type** on every case.
+
+Cases you already saved keep their old text. Record the flow again to get the new
+style. Your current column layout is kept as is; press **Reset** under ⚙ → Table
+columns (or add columns with the new roles) to show Preconditions, Test Data and
+Priority.
 
 ## Recent additions
 

@@ -101,7 +101,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 async function handleAISuggest({ apiKey, model, appContext, flow, existing, images }) {
   try {
-    const system = "You are a senior QA engineer generating smoke and functional test cases for a web application. Return ONLY a JSON array — no prose, no markdown code fences. Each element must be an object: {\"scenario\": string (concise, starting with 'Validate'), \"steps\": array of short strings, \"expected\": string}. If screenshots of the app are provided, examine them and write test cases feature by feature — one or more cases for every interactive element you can see (buttons, menus, dropdowns, fields, checkboxes, links, tabs) — plus positive, negative, and edge cases. Each scenario must be unique; do NOT repeat any scenario listed in existingScenarios and do NOT produce two cases with the same scenario text.";
+    const system = [
+      "You are a senior QA engineer writing manual test cases for a web application. A tester will execute your cases step by step, so each one has to be specific enough to run without guessing and to give a clear pass/fail verdict.",
+      "Return only a JSON array, with no prose and no markdown code fences. Each element is an object: {\"module\": string (feature area, e.g. Login, Transactions), \"scenario\": string (one concise sentence starting with 'Validate'), \"preconditions\": array of strings (state needed before step 1, e.g. 'User is logged in as an admin'), \"steps\": array of short imperative strings, \"testData\": array of 'Field: value' strings (empty array if none), \"expected\": string, \"priority\": one of Critical | High | Medium | Low, \"type\": one of Positive | Negative | Validation | Boundary | Functional | UI | Security}.",
+      "Quality bar: steps name the exact control and the exact value to use (write 'Enter \"-500\" into the \"Amount\" field', not 'enter invalid data'). The expected result is observable and checkable: the message text, the page that opens, the value shown, or what must not happen. Avoid vague outcomes like 'works as expected' or 'performs its intended action'. Test one behaviour per case. Use the recorded flow's real field labels, button names and values where they apply.",
+      "Coverage: mix positive, negative, boundary-value (min/max length, zero, negative, very large numbers), required-field, and permission or security cases where relevant. If screenshots are provided, cover the interactive elements you can see on them, feature by feature.",
+      "Each scenario must be unique: do not repeat anything listed in existingScenarios, and do not produce two cases with the same scenario text.",
+    ].join("\n\n");
     const user = JSON.stringify({
       app: appContext || "(no description provided — infer from the recorded flow)",
       recordedFlow: flow || null,
@@ -172,11 +178,16 @@ chrome.runtime.onInstalled.addListener(async () => {
     shots: cur.shots ?? [],
     statusOptions: cur.statusOptions ?? ["Pass", "Fail", "Not Tested", "Pending"],
     columns: cur.columns ?? [
+      // keep in sync with DEFAULT_COLUMNS in popup.js
       { id: "c_id", name: "TC ID", role: "id" },
+      { id: "c_mod", name: "Test Module", role: "module" },
       { id: "c_scn", name: "Test Scenario", role: "scenario" },
+      { id: "c_pre", name: "Preconditions", role: "preconditions" },
       { id: "c_stp", name: "Test Steps", role: "steps" },
+      { id: "c_dat", name: "Test Data", role: "data" },
       { id: "c_exp", name: "Expected Result", role: "expected" },
       { id: "c_act", name: "Actual Result", role: "actual" },
+      { id: "c_pri", name: "Priority", role: "priority", options: ["Critical", "High", "Medium", "Low"] },
       { id: "c_sts", name: "Status", role: "status" },
       { id: "c_col1", name: "Column 1", role: "blank" },
     ],

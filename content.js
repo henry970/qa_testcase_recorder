@@ -52,7 +52,26 @@
       type: el.type || null,
       tag: (el.tagName || "").toLowerCase(),
       text: t && t.length <= 60 ? t : null,
+      rules: rulesFor(el),
     };
+  }
+
+  // The field's own validation rules, so cases can test real boundaries.
+  function rulesFor(el) {
+    const tag = (el.tagName || "").toLowerCase();
+    if (tag !== "input" && tag !== "textarea" && tag !== "select") return null;
+    const r = {};
+    if (el.required || el.getAttribute("aria-required") === "true") r.required = true;
+    if (el.maxLength > 0 && el.maxLength < 100000) r.maxLength = el.maxLength;
+    if (el.minLength > 0) r.minLength = el.minLength;
+    const min = el.getAttribute("min"), max = el.getAttribute("max");
+    if (min !== null && min !== "") r.min = min;
+    if (max !== null && max !== "") r.max = max;
+    const pattern = el.getAttribute("pattern");
+    if (pattern) r.pattern = pattern;
+    const mode = el.getAttribute("inputmode");
+    if (mode) r.inputMode = mode;
+    return Object.keys(r).length ? r : null;
   }
 
   // Best-effort human-readable label for an element.
