@@ -1,5 +1,7 @@
 # QA TestCase Recorder
 
+![QA TestCase Recorder](logo.png)
+
 **Turn the clicks you already make into proper, structured QA test cases —
 complete with real evidence.**
 
