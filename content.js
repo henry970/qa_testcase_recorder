@@ -74,44 +74,133 @@
     return Object.keys(r).length ? r : null;
   }
 
-  // Best-effort human-readable label for an element.
+  // ---- labels ------------------------------------------------------------
+  // Tidy a label as a tester would read it: "Email *" / "Country:" -> "Email" / "Country".
+  function cleanLabel(s) {
+    return String(s || "")
+      .replace(/\s+/g, " ")
+      .replace(/\(\s*(required|optional)\s*\)/gi, "")
+      .replace(/^[\s*:]+|[\s*:：]+$/g, "")
+      .trim();
+  }
+  // "user-name" / "firstName" / "billing_zip" -> "User name" / "First name" / "Billing zip"
+  function humanize(s) {
+    const t = String(s || "")
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      .replace(/[-_.[\]]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    return t ? t[0].toUpperCase() + t.slice(1) : "";
+  }
+  // A label's own text, without the text of controls inside it (a <label>
+  // wrapping a <select> would otherwise include every option).
+  function ownText(node) {
+    if (!node) return "";
+    const c = node.cloneNode(true);
+    c.querySelectorAll && c.querySelectorAll("input, select, textarea, button, option, svg, [aria-hidden='true']").forEach((x) => x.remove());
+    return cleanLabel(c.textContent);
+  }
+  const isFormControl = (el) => /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName || "") || el.isContentEditable;
+  const shortText = (t) => t && t.length <= 60;
+
+  // Visible text placed next to a field that isn't linked as a <label>
+  // (common in custom UI kits): a preceding sibling, or a label/legend-like
+  // element in the field's wrapper, up to three levels up.
+  function nearbyLabel(el) {
+    let node = el;
+    for (let depth = 0; depth < 3 && node && node !== document.body; depth++) {
+      let sib = node.previousElementSibling;
+      for (let hops = 0; sib && hops < 2; hops++, sib = sib.previousElementSibling) {
+        if (sib.querySelector && sib.querySelector("input, select, textarea")) break;
+        const t = ownText(sib);
+        if (shortText(t)) return t;
+      }
+      const parent = node.parentElement;
+      if (!parent) break;
+      const lab = parent.querySelector(":scope > label, :scope > legend, :scope > [class*='label' i]");
+      if (lab && lab !== el && !lab.contains(el) && !(lab.querySelector && lab.querySelector("input, select, textarea"))) {
+        const t = ownText(lab);
+        if (shortText(t)) return t;
+      }
+      // stop once the wrapper holds other fields — beyond it we'd pick up their labels
+      if (parent.querySelectorAll("input, select, textarea").length > 1) break;
+      node = parent;
+    }
+    return "";
+  }
+
+  // Best-effort human-readable label for an element — the name a tester sees.
   function labelFor(el) {
     if (!el) return "element";
+    const attr = (n) => (el.getAttribute && el.getAttribute(n)) || "";
 
     // 1. aria-label
-    const aria = el.getAttribute && el.getAttribute("aria-label");
-    if (aria && aria.trim()) return aria.trim();
+    if (cleanLabel(attr("aria-label"))) return cleanLabel(attr("aria-label"));
 
-    // 2. aria-labelledby
-    const labelledby = el.getAttribute && el.getAttribute("aria-labelledby");
-    if (labelledby) {
-      const ref = document.getElementById(labelledby);
-      if (ref && ref.textContent.trim()) return ref.textContent.trim();
+    // 2. aria-labelledby (may list several ids)
+    if (attr("aria-labelledby")) {
+      const t = cleanLabel(attr("aria-labelledby").split(/\s+/).map((id) => ownText(document.getElementById(id))).join(" "));
+      if (t) return t;
     }
 
-    // 3. associated <label> (for form fields)
-    if (el.labels && el.labels.length && el.labels[0].textContent.trim()) {
-      return el.labels[0].textContent.trim();
+    if (isFormControl(el)) {
+      // 3. linked <label for> / wrapping <label>
+      if (el.labels && el.labels.length) {
+        const t = ownText(el.labels[0]);
+        if (t) return t;
+      }
+      // 4. text placed next to the field
+      const near = nearbyLabel(el);
+      if (near) return near;
+      // 5. placeholder / title, then the code name made readable
+      const ph = cleanLabel(attr("placeholder") || attr("title"));
+      if (ph) return ph;
+      const code = humanize(el.name || el.id);
+      if (code) return code;
+      return el.tagName.toLowerCase();
     }
 
-    // 4. visible text (buttons, links)
-    const text = (el.innerText || el.textContent || "").trim();
-    if (text && text.length <= 60) return text;
-
-    // 5. value on buttons
-    if (el.value && (el.tagName === "BUTTON" || el.type === "submit" || el.type === "button")) {
-      return String(el.value).trim();
-    }
-
-    // 6. placeholder / title / name / id
-    const fallback =
-      el.getAttribute?.("placeholder") ||
-      el.getAttribute?.("title") ||
-      el.name ||
-      el.id;
-    if (fallback && String(fallback).trim()) return String(fallback).trim();
-
+    // buttons, links, menu items: their visible text
+    const text = cleanLabel(el.innerText || el.textContent || "");
+    if (shortText(text)) return text;
+    if (el.value && (el.tagName === "BUTTON" || el.type === "submit" || el.type === "button")) return cleanLabel(el.value);
+    const fallback = cleanLabel(attr("title")) || humanize(el.name || el.id);
+    if (fallback) return fallback;
     return el.tagName ? el.tagName.toLowerCase() : "element";
+  }
+
+  // The name of the form a control belongs to, as shown on screen:
+  // aria-label / legend / heading inside the form, or the heading just above it.
+  function formNameFor(el) {
+    if (!el || !el.closest) return null;
+    const scope = el.closest("form, [role='form'], fieldset, [role='dialog'], dialog");
+    if (!scope) return null;
+    const a = (n) => scope.getAttribute(n) || "";
+    if (cleanLabel(a("aria-label"))) return cleanLabel(a("aria-label"));
+    if (a("aria-labelledby")) {
+      const t = cleanLabel(a("aria-labelledby").split(/\s+/).map((id) => ownText(document.getElementById(id))).join(" "));
+      if (t) return t;
+    }
+    const inner = scope.querySelector("legend, h1, h2, h3, h4, [role='heading']");
+    if (inner && shortText(ownText(inner))) return ownText(inner);
+    // a heading right above the form (walk back through siblings, then up)
+    let node = scope;
+    for (let depth = 0; depth < 3 && node && node !== document.body; depth++) {
+      let sib = node.previousElementSibling;
+      let blocked = false;
+      for (let hops = 0; sib && hops < 3; hops++, sib = sib.previousElementSibling) {
+        // another form / field in between: any heading beyond it belongs to that one
+        if (sib.matches && sib.matches("form, fieldset, input, select, textarea")) { blocked = true; break; }
+        if (sib.querySelector && sib.querySelector("form, input, select, textarea")) { blocked = true; break; }
+        const h = sib.matches && sib.matches("h1, h2, h3, h4, [role='heading']") ? sib : sib.querySelector && sib.querySelector("h1, h2, h3, h4, [role='heading']");
+        if (h && shortText(ownText(h))) return ownText(h);
+      }
+      if (blocked) break;
+      node = node.parentElement;
+    }
+    const code = humanize(a("name") || a("id"));
+    return code && !/^form$/i.test(code) ? code : null;
   }
 
   // Find the meaningful clickable ancestor of the raw event target.
@@ -214,7 +303,7 @@
       const textField = tag === "textarea" || tag === "select" ||
         (tag === "input" && !["button", "submit", "reset", "image"].includes(typ));
       if (textField || el.isContentEditable) return;
-      send({ type: "click", kind, label: labelFor(el), sel: selFor(el) });
+      send({ type: "click", kind, label: labelFor(el), form: formNameFor(el), sel: selFor(el) });
     },
     true
   );
@@ -228,20 +317,20 @@
       const kind = kindOf(el);
 
       if (kind === "checkbox" || kind === "radio") {
-        send({ type: "toggle", kind, label: labelFor(el), checked: !!el.checked, sel: selFor(el) });
+        send({ type: "toggle", kind, label: labelFor(el), checked: !!el.checked, form: formNameFor(el), sel: selFor(el) });
         return;
       }
       if (kind === "select") {
         const opt = el.options?.[el.selectedIndex];
-        send({ type: "select", label: labelFor(el), value: opt ? opt.text.trim() : el.value, sel: selFor(el) });
+        send({ type: "select", label: labelFor(el), value: opt ? opt.text.trim() : el.value, form: formNameFor(el), sel: selFor(el) });
         return;
       }
       if (kind === "input" || kind === "textarea") {
         if (isSensitive(el)) {
-          send({ type: "input", label: labelFor(el), value: null, sensitive: true, sel: selFor(el) });
+          send({ type: "input", label: labelFor(el), value: null, sensitive: true, form: formNameFor(el), sel: selFor(el) });
           scanLoginFeatures();
         } else {
-          send({ type: "input", label: labelFor(el), value: el.value, sel: selFor(el) });
+          send({ type: "input", label: labelFor(el), value: el.value, form: formNameFor(el), sel: selFor(el) });
         }
       }
     },
@@ -256,7 +345,7 @@
       if (e.key !== "Enter") return;
       const el = e.target;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) {
-        send({ type: "key", label: labelFor(el), value: "Enter", sel: selFor(el) });
+        send({ type: "key", label: labelFor(el), value: "Enter", form: formNameFor(el), sel: selFor(el) });
       }
     },
     true

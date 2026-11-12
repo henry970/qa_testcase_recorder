@@ -339,3 +339,36 @@ test("every case has preconditions, a type and a priority", () => {
   assert.match(byScenario(cases, /"Transactions" link/).preconditions, /logged in/);
   assert.match(byScenario(cases, /empty email field/).preconditions, /logged out/);
 });
+
+// ---- names as shown on screen -----------------------------------------------
+const shippingForm = () => [
+  { type: "navigate", url: "https://shop.example.com/checkout/step-one", page: "Shop" },
+  { type: "input", label: "Full name *", value: "Ada Obi", form: "Shipping Address", sel: { tag: "input", type: "text" } },
+  { type: "input", label: "Postcode:", value: "100001", form: "Shipping Address", sel: { tag: "input", type: "text" } },
+  { type: "click", kind: "button", label: "Continue", form: "Shipping Address", sel: { tag: "button" } },
+];
+
+test("field cases name the form by its on-screen name", () => {
+  const s = scenarios(G.generateSuite(shippingForm(), { flowValidation: false }));
+  assert.ok(s.includes("Validate the Shipping Address form with an empty full name field."));
+  assert.ok(!s.some((x) => /Step One form/i.test(x)), "fell back to the URL-derived name");
+});
+
+test("positive and negative cases use the form name too", () => {
+  const cases = G.generateSuite(shippingForm(), { flowValidation: false });
+  assert.strictEqual(cases.find((c) => c.kind === "positive").scenario, "Validate continue on the Shipping Address form with valid input.");
+  assert.strictEqual(cases.find((c) => c.kind === "negative").scenario, 'Validate the Shipping Address form rejects invalid input on "Continue".');
+});
+
+test("a form name that already ends in 'form' is not doubled", () => {
+  const evs = shippingForm().map((e) => (e.form ? Object.assign({}, e, { form: "Contact form" }) : e));
+  const s = scenarios(G.generateSuite(evs, { flowValidation: false }));
+  assert.ok(s.includes("Validate the Contact form with an empty full name field."));
+  assert.ok(!s.some((x) => /form form/i.test(x)));
+});
+
+test("labels are tidied: required stars and trailing colons removed", () => {
+  const steps = G.buildSteps(shippingForm());
+  assert.ok(steps.includes('Enter "Ada Obi" into the "Full name" field.'));
+  assert.ok(steps.includes('Enter "100001" into the "Postcode" field.'));
+});

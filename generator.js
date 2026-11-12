@@ -71,6 +71,7 @@
       } else if (ev.type === "input") {
         if (!cur) { cur = { page: firstPage(evs), url: "", inputs: [], clicks: [], messages: [], hasPw: false }; segs.push(cur); }
         cur.inputs.push(ev); if (ev.sensitive) cur.hasPw = true;
+        if (ev.form && !cur.form) cur.form = ev.form; // the form's on-screen name
       } else if (ev.type === "click" && cur) {
         cur.clicks.push(ev);
       } else if (ev.type === "message" && cur) {
@@ -162,7 +163,27 @@
     }
   }
 
-  function buildSteps(evs) {
+  // ---- names as the tester sees them ---------------------------------------
+  // "Shipping Address" -> "Shipping Address form"; "Sign-up form" stays as is.
+  const formTitle = (name) => (/\bform$/i.test(String(name).trim()) ? String(name).trim() : `${String(name).trim()} form`);
+  // The form most of the recorded fields belong to.
+  function formOf(evs) {
+    const counts = new Map();
+    evs.forEach((e) => { if (e.form && (e.type === "input" || e.type === "select" || e.type === "toggle")) counts.set(e.form, (counts.get(e.form) || 0) + 1); });
+    let best = null, n = 0;
+    counts.forEach((v, k) => { if (v > n) { best = k; n = v; } });
+    return best;
+  }
+  // Tidy labels from older recordings: "Email *" / "Country:" -> "Email" / "Country".
+  function tidyLabel(s) {
+    return String(s || "").replace(/\s+/g, " ").replace(/\(\s*(required|optional)\s*\)/gi, "").replace(/^[\s*:]+|[\s*:：]+$/g, "").trim();
+  }
+  function tidy(evs) {
+    return (evs || []).filter(Boolean).map((e) => (e.label != null && tidyLabel(e.label) !== e.label ? Object.assign({}, e, { label: tidyLabel(e.label) || e.label }) : e));
+  }
+
+  function buildSteps(evsIn) {
+    const evs = tidy(evsIn);
     const steps = [];
     let lastNav = null;
     let curTab = null;
@@ -238,7 +259,10 @@
       scenario = `Validate ${place}login with valid credentials.`;
       expected = landed ? `User is successfully logged in and lands on ${landed}.` : "User is successfully logged in.";
     } else if (primary) {
-      scenario = `Validate ${actionNoun(evs)} with valid input.`;
+      const form = primary.form || formOf(evs);
+      scenario = form
+        ? `Validate ${actionNoun(evs)} on the ${formTitle(form)} with valid input.`
+        : `Validate ${actionNoun(evs)} with valid input.`;
       expected = landed
         ? `The action completes successfully and ${landed} is displayed.`
         : `The action completes successfully with the expected result.`;
@@ -320,8 +344,8 @@
     const cases = [];
     pageSegments(evs).forEach((seg) => {
       if (!seg.inputs.length) return;
-      const action = seg.hasPw ? "login" : `the ${seg.page} form`;
-      const mod = seg.hasPw ? "Login" : moduleFromPage(seg.page);
+      const action = seg.hasPw ? "login" : `the ${seg.form ? formTitle(seg.form) : `${seg.page} form`}`;
+      const mod = seg.hasPw ? "Login" : (seg.form && moduleFromLabel(seg.form)) || moduleFromPage(seg.page);
       const submit = seg.clicks.find((c) => SUBMIT_RE.test(c.label || "")) || seg.clicks[seg.clicks.length - 1];
       const submitLabel = submit ? submit.label : "Submit";
       const fields = uniqueInputs(seg.inputs);
@@ -559,8 +583,10 @@
     }
     steps.push(`Click the "${submit.label}" button.`);
     return [{
-      module: moduleFromLabel(submit.label) || "General",
-      scenario: `Validate "${submit.label}" is rejected with invalid input.`,
+      module: moduleFromLabel(submit.label) || (seg.form && moduleFromLabel(seg.form)) || "General",
+      scenario: seg.form
+        ? `Validate the ${formTitle(seg.form)} rejects invalid input on "${submit.label}".`
+        : `Validate "${submit.label}" is rejected with invalid input.`,
       steps,
       data: fields.map((f) => `${f.label}: ${INVALID_SAMPLE[fieldType(f)] || (typed.length || f !== fields[0] ? recordedValue(f) : "(empty)")}`).join("\n"),
       expected: (err ? `The error "${err}" is displayed and the action is blocked.` : `Error messages point to the invalid fields and the action is blocked.`) +
@@ -684,7 +710,7 @@
   }
 
   function generateSuite(events, opts = {}) {
-    const evs = (events || []).filter(Boolean);
+    const evs = tidy(events);
     const { fieldValidation = true, flowValidation = true, negatives = true, elements = true } = opts;
     const cases = [];
     cases.push(positiveCase(evs));                          // valid

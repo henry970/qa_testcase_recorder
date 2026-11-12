@@ -183,6 +183,13 @@ chart, but the HTML report has the visual).
 
 ## How the generated cases are written
 
+- **Names as shown on screen.** Fields are named by their visible label, and the
+  recorder finds it in this order: a linked `<label>`, then text placed next to the
+  field (as in many UI kits), then the placeholder, and finally the code name made
+  readable (`billing_zip` → "Billing zip"). Markers such as `*`, `:` and
+  "(required)" are removed. Forms are named by their own heading, legend or
+  `aria-label`, or the heading just above them, e.g. "Validate the Shipping
+  Address form with an empty full name field." Without one, the page name is used.
 - **Real values, not placeholders.** A field-validation case re-enters the form
   exactly as you recorded it and changes only the field under test, so the steps
   read `Enter "admin@corp.com" into the "Email" field.` and not "fill the other
