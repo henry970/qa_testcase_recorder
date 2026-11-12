@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>QA TestCase Recorder</title>
+  </head>
+  <body>
+    <header class="bar">
+      <div class="brand">
+        <span class="brand-mark"></span>
+        <span class="brand-name">TestCase Recorder</span>
+      </div>
+      <button id="settingsToggle" class="icon-btn" title="Settings" aria-label="Settings">⚙</button>
+    </header>
+
+    <section id="settings" class="settings" hidden>
+      <div class="field-row">
+        <label class="mini">ID prefix<input id="prefix" type="text" value="SMK" maxlength="12" /></label>
+        <label class="mini">Start #<input id="startNumber" type="number" min="1" value="1" /></label>
+      </div>
+
+      <div class="cols-head">
+        <span>Table columns</span>
+        <div>
+          <button id="importCsv" class="link-btn">Import CSV</button>
+          <button id="resetCols" class="link-btn">Reset</button>
+        </div>
+      </div>
+      <ul id="colList" class="col-list"></ul>
+      <button id="addCol" class="btn ghost tiny">+ Add column</button>
+      <p class="hint"><b>Role</b> tells the generator what goes in a column: Auto ID, Scenario,
+        Test Steps, Expected, <em>Actual Result</em> (filled while testing), Status, or Blank.</p>
+
+      <label class="check"><input id="optField" type="checkbox" checked /> Generate field-validation cases</label>
+      <label class="check"><input id="optFlow" type="checkbox" checked /> Generate flow-validation cases (page loads / end-to-end)</label>
+      <label class="check"><input id="optNeg" type="checkbox" checked /> Generate negative cases</label>
+      <label class="check"><input id="optElements" type="checkbox" checked /> One case per button / menu / checkbox (feature by feature)</label>
+      <label class="check"><input id="optMsgs" type="checkbox" checked /> Capture error / success messages</label>
+      <label class="check"><input id="optShots" type="checkbox" checked /> Capture a screenshot of each page</label>
+      <label class="check"><input id="optAutoPass" type="checkbox" checked /> Mark cases Pass when a success message is seen</label>
+
+      <label class="block-setting">Status options <span class="muted">(comma-separated)</span>
+        <input id="statusOpts" type="text" placeholder="Pass, Fail, Not Tested, Pending" />
+      </label>
+
+      <div class="cols-head"><span>AI suggestions</span></div>
+      <label class="block-setting">Anthropic API key
+        <div class="key-row">
+          <input id="apiKey" type="password" placeholder="sk-ant-..." autocomplete="off" />
+          <button id="showKey" type="button" class="btn ghost tiny">Show</button>
+        </div>
+        <span id="keyStatus" class="key-status"></span>
+      </label>
+      <label class="block-setting">Model
+        <input id="aiModel" type="text" placeholder="claude-sonnet-4-6" />
+      </label>
+      <label class="block-setting">App description <span class="muted">(what to test)</span>
+        <textarea id="appContext" rows="3" placeholder="e.g. Admin portal for a fintech: dashboard with transaction stats and balances; transactions page with search, filter, approve/reject; pool & operating accounts; user management."></textarea>
+      </label>
+      <p class="hint">Your key is stored locally on this device and sent only to Anthropic when you press AI suggest. Recording field <em>labels</em> may be included for context; field <em>values</em> are never sent.</p>
+      <label class="check"><input id="aiUseShots" type="checkbox" checked /> Use page screenshots (vision) so Claude writes cases from what's on screen</label>
+    </section>
+
+    <section class="recorder">
+      <div class="rec-controls">
+        <button id="recordBtn" class="record" aria-pressed="false">
+          <span class="dot"></span>
+          <span class="record-label">Start recording</span>
+        </button>
+        <button id="pauseBtn" class="pause" hidden>Pause</button>
+      </div>
+      <p id="statusLine" class="status">Idle — press record, then perform your flow on the page.</p>
+    </section>
+
+    <section class="ai-bar">
+      <button id="aiBtn" class="btn ghost tiny">✨ AI suggest more cases</button>
+    </section>
+
+    <section id="codeBar" class="code-bar" hidden>
+      <span class="code-bar-label">Export last recording as test:</span>
+      <button id="pwBtn" class="btn ghost tiny">Playwright</button>
+      <button id="cyBtn" class="btn ghost tiny">Cypress</button>
+    </section>
+
+    <section id="batch" class="batch" hidden>
+      <div class="batch-head">
+        <span class="tag">Generated</span>
+        <span id="batchInfo" class="muted"></span>
+      </div>
+      <div id="batchShots" class="shot-strip"></div>
+      <div id="recordedFlow" class="recorded-flow" hidden></div>
+      <ul id="batchList" class="batch-list"></ul>
+      <div class="batch-actions">
+        <button id="discardBtn" class="btn ghost">Discard</button>
+        <button id="addBtn" class="btn primary">Add selected to suite</button>
+      </div>
+    </section>
+
+    <section class="saved">
+      <div class="saved-head">
+        <span>Saved cases <span id="savedCount" class="badge">0</span></span>
+        <div class="saved-actions">
+          <button id="summaryToggle" class="link-btn" hidden>📊 Summary</button>
+          <button id="screensBtn" class="link-btn" hidden>⤓ Screenshots</button>
+          <button id="clearBtn" class="link-btn" hidden>Clear all</button>
+        </div>
+      </div>
+
+      <div id="summary" class="summary-panel" hidden>
+        <div class="summary-top">
+          <div id="pie" class="pie"></div>
+          <div id="summaryStats" class="summary-stats"></div>
+        </div>
+        <div class="summary-actions">
+          <button id="resetStatusBtn" class="btn ghost tiny">Reset all to Not Tested</button>
+          <button id="reportBtn" class="btn ghost tiny">⤓ Export report (HTML)</button>
+        </div>
+      </div>
+      <ul id="savedList" class="saved-list"></ul>
+      <p id="emptyState" class="empty">No test cases yet. Record a flow to create your first one.</p>
+    </section>
+
+    <footer class="foot">
+      <button id="copyBtn" class="btn ghost" disabled>Copy</button>
+      <button id="exportBtn" class="btn ghost" disabled>CSV</button>
+      <button id="xlsxBtn" class="btn primary" disabled>Excel</button>
+    </footer>
+
+    <input id="csvFile" type="file" accept=".csv,text/csv" hidden />
+
+    <script src="generator.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
