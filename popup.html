@@ -46,6 +46,17 @@
         <input id="statusOpts" type="text" placeholder="Pass, Fail, Not Tested, Pending" />
       </label>
 
+      <div class="cols-head"><span>Azure DevOps export</span></div>
+      <label class="block-setting">Area Path <span class="muted">(must already exist, e.g. MyProject\Web)</span>
+        <input id="azArea" type="text" placeholder="MyProject\Web" />
+      </label>
+      <label class="block-setting">Assigned To <span class="muted">(a user in your organization)</span>
+        <input id="azAssignee" type="text" placeholder="user@company.com" />
+      </label>
+      <label class="block-setting">State for new test cases
+        <input id="azState" type="text" placeholder="Design" />
+      </label>
+
       <div class="cols-head"><span>AI suggestions</span></div>
       <label class="block-setting">Anthropic API key
         <div class="key-row">
@@ -133,6 +144,13 @@
     </section>
 
     <footer class="foot">
+      <select id="toolExport" class="btn ghost tool-export" disabled title="Download a CSV laid out for a test-management tool">
+        <option value="" selected>Export for…</option>
+        <option value="testrail">TestRail</option>
+        <option value="xray">Jira Xray</option>
+        <option value="zephyr">Zephyr Scale</option>
+        <option value="azure">Azure DevOps</option>
+      </select>
       <button id="copyBtn" class="btn ghost" disabled>Copy</button>
       <button id="exportBtn" class="btn ghost" disabled>CSV</button>
       <button id="xlsxBtn" class="btn primary" disabled>Excel</button>
@@ -141,6 +159,7 @@
     <input id="csvFile" type="file" accept=".csv,text/csv" hidden />
 
     <script src="generator.js"></script>
+    <script src="exporters.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

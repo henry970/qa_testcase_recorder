@@ -319,12 +319,35 @@ When the replay finishes, the case's
   it can look at the actual UI and write cases for every visible element. Screenshots
   are available right after recording (before you add the batch).
 
+## Export to TestRail, Jira Xray, Zephyr Scale or Azure DevOps
+
+Use the **Export for…** dropdown in the footer to download a CSV laid out for
+your test-management tool. It reads your saved cases by column role (Scenario,
+Steps, Expected Result, Preconditions, Test Data, Priority, Module, Test Type), so
+your own column names don't matter.
+
+| Tool | Layout | How to import |
+|---|---|---|
+| **TestRail** | One row per case; numbered steps in one cell. Columns: Title, Section, Type, Priority, Preconditions, Steps, Test Data, Expected Result | Test Cases → Import → CSV. Map the columns in the wizard (suits the *Test Case (Text)* template) |
+| **Jira Xray** | One row per step, grouped by `Issue Id`. Columns: Summary, Description (holds preconditions), Priority, Labels, Component, Test Type = Manual, Action, Data, Expected Result | Xray Test Case Importer → CSV. Map `Issue Id` as the grouping column, then map the step fields |
+| **Zephyr Scale** | One row per step; case fields on the first row only. Columns: Name, Objective, Precondition, Folder (`/Module`), Status, Priority, Labels, Test Script (Step-by-Step) - Step / Test Data / Expected Result | Test cases → Import → CSV. Map the fields in the wizard |
+| **Azure DevOps** | Microsoft's documented header: ID (empty = new), Work Item Type, Title, Test Step, Step Action, Step Expected, Area Path, Assigned To, State, Priority (1–4) | Test Plans → a test suite → **Import test cases from CSV/XLSX** |
+
+- Each case has one overall expected result, so it goes on the **last step**.
+- **Azure DevOps** has no preconditions or test-data field, so these become the
+  first steps ("Preconditions: …", "Use this test data: …").
+- **Azure DevOps** also requires an **Area Path** and **Assigned To**. Set them
+  once under ⚙ → *Azure DevOps export*. The Area Path must already exist in your
+  project. *State* defaults to `Design`.
+- These files have no byte-order mark, because some importers read it as part of
+  the first column name. They are UTF-8 with Windows line endings.
+
 ## Build the Chrome Web Store package
 
     npm run build
 
 This runs the unit tests and then writes `dist/qa-testcase-recorder-<version>.zip`.
-The zip holds only the 13 files the extension loads, with `manifest.json` at the
+The zip holds only the 14 files the extension loads, with `manifest.json` at the
 top level. Git data, tests, `package.json`, the README and `logo.png` are left out.
 The build stops with an error if the extension references a file that isn't
 packaged, if the manifest version is invalid, or if the description is over 132

@@ -18,6 +18,7 @@ const FILES = [
   "popup.html",
   "popup.css",
   "popup.js",
+  "exporters.js",
   "xlsx.full.min.js",
   "icon16.png",
   "icon32.png",

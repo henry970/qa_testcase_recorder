@@ -287,3 +287,8 @@ textarea { resize: vertical; font-family: var(--mono); font-size: 12px; line-hei
 .run-replay input { flex: 1; min-width: 120px; background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; font-size: 11px; }
 .run-replay .last { font-size: 11px; color: var(--muted); }
+
+/* ---- export for test-management tools ---------------------------------- */
+.foot { flex-wrap: wrap; }
+.foot .tool-export { flex: 1 1 100%; text-align: center; text-align-last: center; appearance: auto; }
+.foot .tool-export:disabled { opacity: 0.4; cursor: not-allowed; }

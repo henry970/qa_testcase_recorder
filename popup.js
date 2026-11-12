@@ -15,6 +15,7 @@ const els = {
   summaryToggle: $("summaryToggle"), summary: $("summary"), pie: $("pie"), summaryStats: $("summaryStats"), reportBtn: $("reportBtn"), resetStatusBtn: $("resetStatusBtn"),
   copyBtn: $("copyBtn"), exportBtn: $("exportBtn"), xlsxBtn: $("xlsxBtn"),
   importCsv: $("importCsv"), csvFile: $("csvFile"),
+  toolExport: $("toolExport"), azArea: $("azArea"), azAssignee: $("azAssignee"), azState: $("azState"),
 };
 
 const DEFAULT_STATUS = ["Pass", "Fail", "Not Tested", "Pending"];
@@ -353,7 +354,7 @@ function renderSaved() {
   els.screensBtn.hidden = !hasShots;
   els.summaryToggle.hidden = !has;
   if (!has) { els.summary.hidden = true; els.summaryToggle.classList.remove("on"); }
-  els.copyBtn.disabled = !has; els.exportBtn.disabled = !has; els.xlsxBtn.disabled = !has;
+  els.copyBtn.disabled = !has; els.exportBtn.disabled = !has; els.xlsxBtn.disabled = !has; els.toolExport.disabled = !has;
   renderSummary();
 }
 
@@ -587,6 +588,57 @@ function download(csv) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 els.exportBtn.addEventListener("click", () => download(buildCSV()));
+
+// ---- export for test-management tools (TestRail / Xray / Zephyr / Azure) --
+// Saved cases are stored by column; read them back by role.
+function normalizedCases() {
+  const colFor = (role) => state.columns.find((c) => c.role === role);
+  const primary = primaryColumn();
+  return state.testcases.map((tc, i) => {
+    const get = (role) => { const col = colFor(role); return col ? String(tc.cells[col.id] ?? "") : ""; };
+    return {
+      id: idFor(i),
+      module: get("module"),
+      title: get("scenario") || (primary ? String(tc.cells[primary.id] ?? "") : "") || idFor(i),
+      preconditions: get("preconditions"),
+      steps: get("steps").split("\n").map((s) => s.replace(/^\s*\d+[.)]\s*/, "").trim()).filter(Boolean),
+      data: get("data"),
+      expected: get("expected"),
+      priority: get("priority"),
+      type: get("type"),
+    };
+  });
+}
+els.toolExport.addEventListener("change", async () => {
+  const key = els.toolExport.value;
+  els.toolExport.value = "";
+  const fmt = window.TCExport && window.TCExport[key];
+  if (!fmt || !state.testcases.length) return;
+  let opts = {};
+  if (key === "azure") {
+    const { exportAzure = {} } = await chrome.storage.local.get("exportAzure");
+    if (!exportAzure.areaPath || !exportAzure.assignedTo) {
+      els.settings.hidden = false;
+      els.azArea.focus();
+      els.statusLine.textContent = "Azure DevOps needs an Area Path and Assigned To — fill them in under ⚙ Azure DevOps export, then export again.";
+      return;
+    }
+    opts = exportAzure;
+  }
+  const csv = fmt.build(normalizedCases(), opts);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" }); // no BOM: importers read it as part of the first header
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `testcases_${fmt.file}_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const n = state.testcases.length;
+  els.statusLine.textContent = `${fmt.label} CSV downloaded (${n} case${n === 1 ? "" : "s"}). ` +
+    (key === "azure" ? "Import it from Test Plans → a test suite → Import test cases." : "Import it with the tool's CSV import wizard and check the column mapping.");
+});
+async function saveAzure() {
+  await save({ exportAzure: { areaPath: els.azArea.value.trim(), assignedTo: els.azAssignee.value.trim(), state: els.azState.value.trim() || "Design" } });
+}
+["azArea", "azAssignee", "azState"].forEach((k) => els[k].addEventListener("input", saveAzure));
 
 // ---- screenshot export (store-only ZIP, no library) ----------------------
 const _crcTable = (() => { const t = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
@@ -1049,6 +1101,8 @@ els.resetCols.addEventListener("click", async () => {
 // ---- init ----------------------------------------------------------------
 (async function init() {
   await load();
+  const { exportAzure = {} } = await chrome.storage.local.get("exportAzure");
+  els.azArea.value = exportAzure.areaPath || ""; els.azAssignee.value = exportAzure.assignedTo || ""; els.azState.value = exportAzure.state || "";
   els.prefix.value = state.prefix; els.startNumber.value = state.startNumber;
   els.optField.checked = state.optField; els.optFlow.checked = state.optFlow; els.optNeg.checked = state.optNeg; els.optElements.checked = state.optElements;
   els.optMsgs.checked = state.captureMsgs; els.optShots.checked = state.captureShots; els.optAutoPass.checked = state.autoPass;
