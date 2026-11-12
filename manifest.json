@@ -5,7 +5,6 @@
   "description": "Records the actions you perform on a page and turns each session into an editable QA test case you can export to CSV.",
   "permissions": [
     "storage",
-    "activeTab",
     "scripting",
     "tabs",
     "unlimitedStorage"

@@ -319,6 +319,17 @@ When the replay finishes, the case's
   it can look at the actual UI and write cases for every visible element. Screenshots
   are available right after recording (before you add the batch).
 
+## Build the Chrome Web Store package
+
+    npm run build
+
+This runs the unit tests and then writes `dist/qa-testcase-recorder-<version>.zip`.
+The zip holds only the 13 files the extension loads, with `manifest.json` at the
+top level. Git data, tests, `package.json`, the README and `logo.png` are left out.
+The build stops with an error if the extension references a file that isn't
+packaged, if the manifest version is invalid, or if the description is over 132
+characters. Raise `"version"` in `manifest.json` before each store upload.
+
 ## Unit tests
 
 The core case-generation and code-gen logic in `generator.js` is covered by unit
