@@ -3,6 +3,27 @@
 // forwards them to the background service worker.
 
 (function () {
+  // Guard against double injection (manifest + scripting.executeScript). A copy
+  // left over from before an extension reload is orphaned (no runtime id), so
+  // a fresh copy is allowed to take over in that case.
+  try {
+    if (window.__qaRecAlive && window.__qaRecAlive()) return;
+  } catch (e) { /* orphaned copy threw — take over */ }
+  window.__qaRecAlive = () => { try { return !!(chrome.runtime && chrome.runtime.id); } catch (e) { return false; } };
+
+  // In an iframe we tag every event with the frame so steps and generated code
+  // can target it. Navigation is only tracked by the top frame.
+  const IS_TOP = window === window.top;
+  function frameInfo() {
+    if (IS_TOP) return null;
+    let src = "";
+    try { src = (window.frameElement && window.frameElement.getAttribute("src")) || ""; } catch (e) { /* cross-origin */ }
+    let title = "";
+    try { title = (window.frameElement && (window.frameElement.getAttribute("title") || window.frameElement.id)) || ""; } catch (e) { /* cross-origin */ }
+    return { url: location.href, name: window.name || "", src, title };
+  }
+  const FRAME = frameInfo();
+
   let recording = false;
   let paused = false;
 
@@ -98,9 +119,11 @@
 
   function send(event) {
     if (!recording || paused) return;
+    if (!IS_TOP && event.type === "navigate") return; // frames don't navigate the test
     event.ts = Date.now();
-    event.url = location.href;
-    event.page = document.title || location.pathname;
+    event.url = IS_TOP ? location.href : "";
+    event.page = IS_TOP ? (document.title || location.pathname) : "";
+    if (FRAME) event.frame = FRAME;
     try {
       chrome.runtime.sendMessage({ type: "RECORD_EVENT", event });
     } catch (e) {
@@ -230,15 +253,19 @@
     send({ type: "navigate", url: location.href, page: document.title || location.pathname, reason });
   }
 
-  ["pushState", "replaceState"].forEach((fn) => {
-    const orig = history[fn];
-    history[fn] = function () {
-      const r = orig.apply(this, arguments);
-      setTimeout(() => noteNav(fn), 0);
-      return r;
-    };
-  });
-  window.addEventListener("popstate", () => setTimeout(() => noteNav("popstate"), 0));
+  // Content scripts run in an isolated world, so patching history.pushState here
+  // would never see the page's own calls. Use the Navigation API where present,
+  // plus a light URL poll as a fallback for SPA route changes.
+  if (IS_TOP) {
+    try {
+      if (window.navigation && window.navigation.addEventListener) {
+        window.navigation.addEventListener("navigatesuccess", () => setTimeout(() => noteNav("spa"), 0));
+      }
+    } catch (e) { /* not supported */ }
+    window.addEventListener("popstate", () => setTimeout(() => noteNav("popstate"), 0));
+    window.addEventListener("hashchange", () => setTimeout(() => noteNav("hashchange"), 0));
+    setInterval(() => { if (recording && !paused) noteNav("poll"); }, 700);
+  }
 
   // ---- error / success message capture -----------------------------------
 

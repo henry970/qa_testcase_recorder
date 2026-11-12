@@ -8,7 +8,8 @@ const els = {
   aiBtn: $("aiBtn"), apiKey: $("apiKey"), showKey: $("showKey"), keyStatus: $("keyStatus"), aiModel: $("aiModel"), appContext: $("appContext"), aiUseShots: $("aiUseShots"),
   recordBtn: $("recordBtn"), recordLabel: document.querySelector(".record-label"), pauseBtn: $("pauseBtn"), statusLine: $("statusLine"),
   batch: $("batch"), batchInfo: $("batchInfo"), batchShots: $("batchShots"), recordedFlow: $("recordedFlow"), batchList: $("batchList"),
-  codeBar: $("codeBar"), pwBtn: $("pwBtn"), cyBtn: $("cyBtn"),
+  codeBar: $("codeBar"), pwBtn: $("pwBtn"), cyBtn: $("cyBtn"), replayBtn: $("replayBtn"), replaySecret: $("replaySecret"),
+  replayPanel: $("replayPanel"), replayTitle: $("replayTitle"), replayStopBtn: $("replayStopBtn"), replayProgress: $("replayProgress"), replayLog: $("replayLog"),
   discardBtn: $("discardBtn"), addBtn: $("addBtn"),
   savedCount: $("savedCount"), savedList: $("savedList"), emptyState: $("emptyState"), clearBtn: $("clearBtn"), screensBtn: $("screensBtn"),
   summaryToggle: $("summaryToggle"), summary: $("summary"), pie: $("pie"), summaryStats: $("summaryStats"), reportBtn: $("reportBtn"), resetStatusBtn: $("resetStatusBtn"),
@@ -35,7 +36,7 @@ const DEFAULT_COLUMNS = () => [
 let state = {
   recording: false, paused: false, events: [], testcases: [],
   prefix: "SMK", startNumber: 1, optField: true, optFlow: true, optNeg: true, captureMsgs: true, captureShots: true,
-  optElements: true, autoPass: true, aiUseShots: true, apiKey: "", aiModel: "claude-sonnet-4-6", appContext: "", statusOptions: DEFAULT_STATUS.slice(), columns: DEFAULT_COLUMNS(),
+  optElements: true, autoPass: true, aiUseShots: true, apiKey: "", aiModel: "claude-opus-5-5", appContext: "", statusOptions: DEFAULT_STATUS.slice(), columns: DEFAULT_COLUMNS(),
 };
 let counterTimer = null;
 
@@ -300,6 +301,29 @@ function renderSaved() {
       } catch (e) { els.statusLine.textContent = "Couldn't capture this tab (restricted page?)."; }
     });
     shotWrap.append(lbl, strip, cap); panel.append(shotWrap);
+
+    // replay: re-run this case's recorded flow and log Pass/Fail automatically
+    if (Array.isArray(tc.events) && tc.events.length) {
+      const rr = document.createElement("div"); rr.className = "run-replay";
+      const go = document.createElement("button"); go.className = "btn ghost tiny"; go.textContent = "▶ Replay this case";
+      let secret = null;
+      if (hasSensitive(tc.events)) {
+        secret = document.createElement("input"); secret.type = "password"; secret.autocomplete = "off";
+        secret.placeholder = "Password for replay (not saved)";
+      }
+      go.addEventListener("click", () => {
+        if (!tc.rid) { tc.rid = newRid(); save({ testcases: state.testcases }); }
+        startReplay(tc.events, secret ? secret.value : "", tc.rid, (idCol ? idFor(i) + " " : "") + (primary ? tc.cells[primary.id] || "" : ""));
+      });
+      rr.append(go);
+      if (secret) rr.append(secret);
+      if (tc.lastReplay) {
+        const last = document.createElement("span"); last.className = "last";
+        last.textContent = `Last replay: ${tc.lastReplay.ok ? "passed" : "failed"}, ${new Date(tc.lastReplay.at).toLocaleString()}`;
+        rr.append(last);
+      }
+      panel.append(rr);
+    }
     li.append(panel);
 
     caret.addEventListener("click", () => {
@@ -457,7 +481,9 @@ async function ensureContentScript() {
   let alive = false;
   try { const res = await chrome.tabs.sendMessage(tab.id, { type: "PING" }); alive = !!(res && res.alive); } catch (e) { alive = false; }
   if (!alive) {
-    try { await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] }); }
+    // all frames, so iframes on an already-open page are recorded too
+    // (content.js guards against running twice in the same frame)
+    try { await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["content.js"] }); }
     catch (e) { return { ok: false, reason: "inject-failed" }; }
     // verify the freshly injected script answers
     try { const res = await chrome.tabs.sendMessage(tab.id, { type: "PING" }); alive = !!(res && res.alive); } catch (e) { alive = false; }
@@ -467,6 +493,7 @@ async function ensureContentScript() {
 
 els.recordBtn.addEventListener("click", async () => {
   if (!state.recording) {
+    if (replayActive) { els.statusLine.textContent = "A replay is running — stop it before recording."; return; }
     const chk = await ensureContentScript();
     if (!chk.ok) {
       els.statusLine.textContent =
@@ -477,11 +504,11 @@ els.recordBtn.addEventListener("click", async () => {
     }
     state.recording = true; state.paused = false; state.events = []; els.batch.hidden = true;
     await resetSessionShots();
-    await save({ recording: true, paused: false, events: [], recordingTabId: chk.tabId ?? null, recordingTabTitle: chk.title || "" });
+    await save({ recording: true, paused: false, events: [], recordingTabId: chk.tabId ?? null, recordingTabIds: chk.tabId != null ? [chk.tabId] : [], recordingTabTitle: chk.title || "" });
     renderRecordState();
     els.statusLine.innerHTML = 'Recording… <span class="count">0</span> actions captured. Perform your flow, then Stop.';
   } else {
-    state.recording = false; state.paused = false; await save({ recording: false, paused: false, recordingTabId: null });
+    state.recording = false; state.paused = false; await save({ recording: false, paused: false, recordingTabId: null, recordingTabIds: [] });
     if (counterTimer) { clearInterval(counterTimer); counterTimer = null; }
     const { events = [] } = await chrome.storage.local.get("events");
     if (!events.length) { els.statusLine.textContent = "No actions were captured. Try again on the target tab."; renderRecordState(); return; }
@@ -511,9 +538,10 @@ els.discardBtn.addEventListener("click", async () => {
 });
 
 els.addBtn.addEventListener("click", async () => {
-  const { shots = [] } = await chrome.storage.local.get("shots");
+  const { shots = [], lastEvents = [] } = await chrome.storage.local.get(["shots", "lastEvents"]);
   const shotIds = shots.map((s) => s.id);
   const attached = new Set();
+  const replayable = lastEvents.filter((e) => e && e.type !== "feature");
   const primary = primaryColumn();
   const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
   const existing = new Set(primary ? state.testcases.map((tc) => norm(tc.cells[primary.id])) : []);
@@ -525,6 +553,8 @@ els.addBtn.addEventListener("click", async () => {
       if (key && existing.has(key)) { skipped++; return; } // never add a duplicate scenario
       if (key) existing.add(key);
       if (li._kind === "positive" && shotIds.length) { c.shots = shotIds.slice(); shotIds.forEach((id) => attached.add(id)); }
+      // keep the recorded flow on the positive case so it can be replayed later
+      if (li._kind === "positive" && replayable.length) { c.events = replayable; c.rid = newRid(); }
       state.testcases.push(c); added++;
     }
   });
@@ -694,7 +724,7 @@ function parseCasesJSON(text) {
 async function aiSuggest() {
   const apiKey = (els.apiKey.value || "").trim();
   if (!apiKey) { els.settings.hidden = false; els.statusLine.textContent = "Add your Anthropic API key in ⚙ settings, then press AI suggest."; return; }
-  const model = (els.aiModel.value || "claude-sonnet-4-6").trim();
+  const model = (els.aiModel.value || "claude-opus-5-5").trim();
   const appContext = els.appContext.value || "";
   await save({ apiKey, aiModel: model, appContext });
   const { events = [] } = await chrome.storage.local.get("events");
@@ -748,7 +778,83 @@ async function updateCodeBar() {
   const { lastEvents = [], events = [] } = await chrome.storage.local.get(["lastEvents", "events"]);
   const src = (events && events.length) ? events : lastEvents;
   els.codeBar.hidden = !(src && src.length);
+  els.replaySecret.hidden = !hasSensitive(lastEvents);
+  els.replayBtn.disabled = !(lastEvents && lastEvents.length);
 }
+
+// ---- replay --------------------------------------------------------------
+let replayActive = false;
+const hasSensitive = (evs) => (evs || []).some((e) => e && e.type === "input" && e.sensitive);
+const newRid = () => "r_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+async function startReplay(events, secret, caseRid, label) {
+  if (state.recording) { els.statusLine.textContent = "Stop recording before replaying."; return; }
+  if (hasSensitive(events) && !secret) {
+    els.statusLine.textContent = "This flow has a password/secret field — type its value in the replay box first.";
+    return;
+  }
+  let tab;
+  try { [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); } catch (e) { tab = null; }
+  if (!tab) { els.statusLine.textContent = "No active tab to replay in."; return; }
+  const res = await chrome.runtime.sendMessage({ type: "REPLAY_START", events, tabId: tab.id, secret: secret || "", caseRid: caseRid || null, label: label || "" });
+  if (!res || !res.ok) { els.statusLine.textContent = `Replay couldn't start: ${(res && res.error) || "unknown error"}`; return; }
+  els.statusLine.textContent = `Replaying ${res.total} steps in this tab…`;
+}
+
+function renderReplay(rs) {
+  if (!rs || (!rs.running && !rs.result)) { els.replayPanel.hidden = true; replayActive = false; return; }
+  replayActive = !!rs.running;
+  els.replayPanel.hidden = false;
+  els.replayStopBtn.textContent = rs.running ? "Stop" : "Close";
+  const pct = rs.total ? Math.round((rs.done / rs.total) * 100) : 0;
+  els.replayProgress.style.width = (rs.running ? pct : 100) + "%";
+  const name = rs.label ? ` — ${rs.label}` : "";
+  els.replayTitle.className = "replay-title";
+  if (rs.running) {
+    els.replayTitle.textContent = `Replaying${name}… ${rs.done}/${rs.total}`;
+  } else if (rs.result.ok) {
+    els.replayTitle.classList.add("ok");
+    els.replayTitle.textContent = `✓ Replay passed${name}` + (rs.result.warnings ? ` (${rs.result.warnings} warning${rs.result.warnings === 1 ? "" : "s"})` : "");
+  } else {
+    els.replayTitle.classList.add("bad");
+    els.replayTitle.textContent = `✗ Replay failed${name}`;
+  }
+  els.replayLog.innerHTML = "";
+  (rs.log || []).forEach((l) => {
+    const li = document.createElement("li"); li.className = l.status;
+    li.textContent = l.text;
+    if (l.note) { const n = document.createElement("span"); n.className = "note"; n.textContent = l.note; li.append(n); }
+    els.replayLog.append(li);
+  });
+  if (!rs.running && rs.result && !rs.result.ok && !(rs.log || []).some((l) => l.status === "fail")) {
+    const li = document.createElement("li"); li.className = "fail"; li.textContent = rs.result.error; els.replayLog.append(li);
+  }
+  els.replayLog.scrollTop = els.replayLog.scrollHeight;
+}
+
+els.replayBtn.addEventListener("click", async () => {
+  const { lastEvents = [] } = await chrome.storage.local.get("lastEvents");
+  if (!lastEvents.length) { els.statusLine.textContent = "No recording to replay yet — record a flow first."; return; }
+  startReplay(lastEvents, els.replaySecret.value, null, "last recording");
+});
+els.replayStopBtn.addEventListener("click", async () => {
+  if (replayActive) { await chrome.runtime.sendMessage({ type: "REPLAY_STOP" }); return; }
+  await save({ replayState: null });
+  renderReplay(null);
+});
+
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== "local") return;
+  if (changes.replayState) renderReplay(changes.replayState.newValue);
+  // the background writes Pass/Fail onto the replayed case — pick it up
+  if (changes.testcases) {
+    const nv = changes.testcases.newValue;
+    if (Array.isArray(nv) && JSON.stringify(nv) !== JSON.stringify(state.testcases)) {
+      state.testcases = nv;
+      renderSaved();
+    }
+  }
+});
 async function exportCode(kind) {
   const { lastEvents = [], events = [] } = await chrome.storage.local.get(["lastEvents", "events"]);
   const src = (events && events.length) ? events : lastEvents;
@@ -767,7 +873,7 @@ els.showKey.addEventListener("click", () => {
   els.apiKey.type = showing ? "password" : "text";
   els.showKey.textContent = showing ? "Show" : "Hide";
 });
-els.aiModel.addEventListener("input", async () => { state.aiModel = els.aiModel.value.trim() || "claude-sonnet-4-6"; await save({ aiModel: state.aiModel }); });
+els.aiModel.addEventListener("input", async () => { state.aiModel = els.aiModel.value.trim() || "claude-opus-5-5"; await save({ aiModel: state.aiModel }); });
 els.appContext.addEventListener("input", async () => { state.appContext = els.appContext.value; await save({ appContext: state.appContext }); });
 els.aiUseShots.addEventListener("change", async () => { state.aiUseShots = els.aiUseShots.checked; await save({ aiUseShots: state.aiUseShots }); });
 els.copyBtn.addEventListener("click", async () => {
@@ -910,7 +1016,7 @@ els.statusOpts.addEventListener("change", async () => {
   const list = [...new Set(els.statusOpts.value.split(",").map((x) => x.trim()).filter(Boolean))];
   state.statusOptions = list.length ? list : DEFAULT_STATUS.slice();
   els.statusOpts.value = state.statusOptions.join(", ");
-  els.apiKey.value = state.apiKey || ""; els.aiModel.value = state.aiModel || "claude-sonnet-4-6"; els.appContext.value = state.appContext || "";
+  els.apiKey.value = state.apiKey || ""; els.aiModel.value = state.aiModel || "claude-opus-5-5"; els.appContext.value = state.appContext || "";
   els.aiUseShots.checked = state.aiUseShots !== false;
   updateKeyStatus();
   await save({ statusOptions: state.statusOptions });
@@ -932,9 +1038,11 @@ els.resetCols.addEventListener("click", async () => {
   els.optField.checked = state.optField; els.optFlow.checked = state.optFlow; els.optNeg.checked = state.optNeg; els.optElements.checked = state.optElements;
   els.optMsgs.checked = state.captureMsgs; els.optShots.checked = state.captureShots; els.optAutoPass.checked = state.autoPass;
   els.statusOpts.value = state.statusOptions.join(", ");
-  els.apiKey.value = state.apiKey || ""; els.aiModel.value = state.aiModel || "claude-sonnet-4-6"; els.appContext.value = state.appContext || "";
+  els.apiKey.value = state.apiKey || ""; els.aiModel.value = state.aiModel || "claude-opus-5-5"; els.appContext.value = state.appContext || "";
   els.aiUseShots.checked = state.aiUseShots !== false;
   updateKeyStatus();
   renderColumns(); renderRecordState(); renderSaved();
   updateCodeBar();
+  const { replayState } = await chrome.storage.local.get("replayState");
+  renderReplay(replayState);
 })();

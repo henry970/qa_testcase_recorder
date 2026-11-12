@@ -130,8 +130,21 @@
   }
 
   // ---- individual step text (for the positive case) ----------------------
+  function frameSuffix(ev) {
+    if (!ev.frame) return "";
+    const f = ev.frame;
+    let n = f.title || f.name || "";
+    if (!n) { try { n = new URL(f.url).hostname; } catch (e) { n = "embedded"; } }
+    return ` (inside the "${n}" frame)`;
+  }
   function stepText(ev) {
+    const t = stepTextBase(ev);
+    const fs = frameSuffix(ev);
+    return fs ? t.replace(/\.$/, fs + ".") : t;
+  }
+  function stepTextBase(ev) {
     switch (ev.type) {
+      case "newtab": return "Switch to the new tab that opens.";
       case "navigate": return `Open ${shortPage(ev.page, ev.url)}.`;
       case "click": {
         const noun = ev.kind === "link" ? "link" : ev.kind === "button" ? "button" : ev.kind || "element";
@@ -150,8 +163,22 @@
   function buildSteps(evs) {
     const steps = [];
     let lastNav = null;
+    let curTab = null;
+    const seenTabs = new Set();
     for (const ev of evs) {
       if (ev.type === "message" || ev.type === "feature") continue; // markers, not steps
+      if (ev.type === "newtab") {
+        seenTabs.add(ev.tabId); curTab = ev.tabId; lastNav = null;
+        steps.push(stepText(ev));
+        continue;
+      }
+      if (ev.tabId != null) {
+        if (curTab == null) { curTab = ev.tabId; seenTabs.add(ev.tabId); }
+        else if (ev.tabId !== curTab && seenTabs.has(ev.tabId)) {
+          curTab = ev.tabId; lastNav = null;
+          steps.push("Switch back to the previous tab.");
+        }
+      }
       if (ev.type === "navigate") {
         const p = shortPage(ev.page, ev.url);
         if (p === lastNav) continue;
@@ -480,7 +507,33 @@
   }
   function testTitle(evs) { return (positiveCase(evs).scenario || "recorded flow").replace(/\.$/, ""); }
 
-  function pwLoc(ev) {
+  // CSS selector for the <iframe> an event happened in.
+  function frameSelector(f) {
+    if (!f) return "iframe";
+    if (f.name) return "iframe" + attrSel("name", f.name);
+    if (f.src) return "iframe" + attrSel("src", f.src);
+    if (f.title) return "iframe" + attrSel("title", f.title);
+    try { const u = new URL(f.url); return `iframe[src*=${JSON.stringify(u.host + u.pathname)}]`; } catch (e) { return "iframe"; }
+  }
+  // Which recorded click / Enter opened each new tab: action index -> newtab event.
+  function tabOpeners(evs) {
+    const map = new Map();
+    evs.forEach((e, i) => {
+      if (e.type !== "newtab") return;
+      for (let j = i - 1; j >= 0; j--) {
+        const t = evs[j].type;
+        if (t === "click" || t === "key") { map.set(j, e); break; }
+        if (t !== "message" && t !== "feature" && t !== "navigate") break;
+      }
+    });
+    return map;
+  }
+
+  function pwLoc(ev, root) {
+    const loc = pwLocBase(ev);
+    return root && root !== "page" ? loc.replace(/^page\./, root + ".") : loc;
+  }
+  function pwLocBase(ev) {
     const sel = ev.sel || {};
     if (sel.testid) return `page.getByTestId(${q(sel.testid)})`;
     const isField = sel.tag === "input" || sel.tag === "textarea" || sel.tag === "select";
@@ -500,17 +553,41 @@
   function buildPlaywright(events) {
     const evs = (events || []).filter(Boolean);
     const first = evs.find((e) => e.type === "navigate");
-    const L = ["import { test, expect } from '@playwright/test';", "", `test(${q(testTitle(evs))}, async ({ page }) => {`];
+    const openers = tabOpeners(evs);
+    const L = ["import { test, expect } from '@playwright/test';", "", `test(${q(testTitle(evs))}, async ({ ${openers.size ? "page, context" : "page"} }) => {`];
     if (first) L.push(`  await page.goto(${q(first.url)});`);
-    evs.forEach((ev) => {
+
+    const pageVar = new Map(); // recorded tabId -> variable name
+    const firstTab = (evs.find((e) => e.tabId != null) || {}).tabId;
+    if (firstTab != null) pageVar.set(firstTab, "page");
+    let cur = "page", nextN = 2;
+    const rootFor = (ev) => (ev.frame ? `${cur}.frameLocator(${qcss(frameSelector(ev.frame))})` : cur);
+
+    evs.forEach((ev, i) => {
+      if (ev.type !== "newtab" && ev.tabId != null && pageVar.has(ev.tabId) && pageVar.get(ev.tabId) !== cur) {
+        cur = pageVar.get(ev.tabId);
+        L.push(`  await ${cur}.bringToFront();`);
+      }
+      const opened = openers.get(i);
+      let newVar = null;
+      if (opened) {
+        newVar = "page" + nextN++;
+        pageVar.set(opened.tabId, newVar);
+        L.push(`  const ${newVar}Promise = context.waitForEvent('page');`);
+      }
+      const R = rootFor(ev);
       switch (ev.type) {
         case "navigate": if (ev !== first) L.push(`  // \u2192 ${shortPage(ev.page, ev.url)}`); break;
-        case "input": L.push(`  await ${pwLoc(ev)}.fill(${ev.sensitive ? "process.env.TEST_PASSWORD ?? 'REPLACE_ME'" : q(ev.value)});`); break;
-        case "select": L.push(`  await ${pwLoc(ev)}.selectOption({ label: ${q(ev.value)} });`); break;
-        case "toggle": L.push(`  await ${pwLoc(ev)}.${ev.checked ? "check" : "uncheck"}();`); break;
-        case "click": L.push(`  await ${pwLoc(ev)}.click();`); break;
-        case "key": if (ev.value === "Enter") L.push(`  await ${pwLoc(ev)}.press('Enter');`); break;
-        case "message": L.push(`  await expect(page.getByText(${q(ev.text)})).toBeVisible();`); break;
+        case "input": L.push(`  await ${pwLoc(ev, R)}.fill(${ev.sensitive ? "process.env.TEST_PASSWORD ?? 'REPLACE_ME'" : q(ev.value)});`); break;
+        case "select": L.push(`  await ${pwLoc(ev, R)}.selectOption({ label: ${q(ev.value)} });`); break;
+        case "toggle": L.push(`  await ${pwLoc(ev, R)}.${ev.checked ? "check" : "uncheck"}();`); break;
+        case "click": L.push(`  await ${pwLoc(ev, R)}.click();`); break;
+        case "key": if (ev.value === "Enter") L.push(`  await ${pwLoc(ev, R)}.press('Enter');`); break;
+        case "message": L.push(`  await expect(${R}.getByText(${q(ev.text)})).toBeVisible();`); break;
+      }
+      if (newVar) {
+        L.push(`  const ${newVar} = await ${newVar}Promise;`, `  await ${newVar}.waitForLoadState();`);
+        cur = newVar;
       }
     });
     L.push("});", "");
@@ -529,21 +606,47 @@
     if (name) return `cy.contains(${q(name)})`;
     return `cy.get(${qcss(sel.tag || "*")})`;
   }
+  // Same-origin iframes only: Cypress reaches into the frame's document body.
+  function cyInFrame(ev, loc) {
+    if (!ev.frame) return loc;
+    const body = `cy.get(${qcss(frameSelector(ev.frame))}).its('0.contentDocument.body').should('not.be.empty').then(cy.wrap)`;
+    if (loc.startsWith("cy.get(")) return body + ".find(" + loc.slice(7);
+    if (loc.startsWith("cy.contains(")) return body + ".contains(" + loc.slice(12);
+    return loc;
+  }
   function buildCypress(events) {
     const evs = (events || []).filter(Boolean);
     const first = evs.find((e) => e.type === "navigate");
     const L = [`describe(${q(testTitle(evs))}, () => {`, "  it('runs the recorded flow', () => {"];
     if (first) L.push(`    cy.visit(${q(first.url)});`);
+    if (evs.some((e) => e.frame)) L.push("    // NOTE: iframe steps work only for same-origin frames (set chromeWebSecurity: false).");
+    const C = (ev) => cyInFrame(ev, cyLoc(ev));
+    let pendingTabVisit = false;
+    let curTab = (evs.find((e) => e.tabId != null) || {}).tabId;
+    const tabUrl = new Map(); // tabId -> last URL seen in it
     evs.forEach((ev) => {
+      if (ev.type === "newtab") {
+        L.push("    // A new tab opened here. Cypress drives a single tab, so visit its URL directly.");
+        pendingTabVisit = true; curTab = ev.tabId;
+        return;
+      }
+      if (ev.tabId != null && curTab != null && ev.tabId !== curTab) {
+        curTab = ev.tabId;
+        if (tabUrl.has(ev.tabId)) L.push("    // Switched back to the earlier tab.", `    cy.visit(${q(tabUrl.get(ev.tabId))});`);
+      }
+      if (ev.type === "navigate" && ev.tabId != null) tabUrl.set(ev.tabId, ev.url);
       switch (ev.type) {
-        case "navigate": if (ev !== first) L.push(`    // \u2192 ${shortPage(ev.page, ev.url)}`); break;
+        case "navigate":
+          if (pendingTabVisit) { L.push(`    cy.visit(${q(ev.url)});`); pendingTabVisit = false; }
+          else if (ev !== first) L.push(`    // \u2192 ${shortPage(ev.page, ev.url)}`);
+          break;
         case "input":
           if (!ev.sensitive && !ev.value) break;
-          L.push(`    ${cyLoc(ev)}.type(${ev.sensitive ? "Cypress.env('TEST_PASSWORD') || 'REPLACE_ME'" : q(ev.value)});`); break;
-        case "select": L.push(`    ${cyLoc(ev)}.select(${q(ev.value)});`); break;
-        case "toggle": L.push(`    ${cyLoc(ev)}.${ev.checked ? "check" : "uncheck"}();`); break;
-        case "click": L.push(`    ${cyLoc(ev)}.click();`); break;
-        case "key": if (ev.value === "Enter") L.push(`    ${cyLoc(ev)}.type('{enter}');`); break;
+          L.push(`    ${C(ev)}.type(${ev.sensitive ? "Cypress.env('TEST_PASSWORD') || 'REPLACE_ME'" : q(ev.value)});`); break;
+        case "select": L.push(`    ${C(ev)}.select(${q(ev.value)});`); break;
+        case "toggle": L.push(`    ${C(ev)}.${ev.checked ? "check" : "uncheck"}();`); break;
+        case "click": L.push(`    ${C(ev)}.click();`); break;
+        case "key": if (ev.value === "Enter") L.push(`    ${C(ev)}.type('{enter}');`); break;
         case "message": L.push(`    cy.contains(${q(ev.text)}).should('be.visible');`); break;
       }
     });

@@ -225,3 +225,46 @@ test("each case is tagged with the feature module", () => {
   // every case has a non-empty module
   assert.ok(cases.every((c) => c.module && c.module.length));
 });
+
+// ---- multi-tab + iframe recording ------------------------------------------
+function multiTabFlow() {
+  return [
+    { type: "navigate", url: "https://shop.example.com/cart", page: "Cart", tabId: 1 },
+    { type: "click", kind: "link", label: "Pay with Provider", sel: { tag: "a", text: "Pay with Provider" }, tabId: 1 },
+    { type: "newtab", tabId: 2, openerTabId: 1 },
+    { type: "navigate", url: "https://pay.example.net/checkout", page: "Pay", tabId: 2 },
+    { type: "input", label: "Card name", value: "Ada", sel: { tag: "input", name: "cardname" }, tabId: 2,
+      frame: { url: "https://widget.example.org/form", name: "payframe", src: "", title: "Payment form" } },
+    { type: "click", kind: "button", label: "Confirm", sel: { tag: "button", text: "Confirm" }, tabId: 2 },
+    { type: "click", kind: "button", label: "Done", sel: { tag: "button", text: "Done" }, tabId: 1 },
+  ];
+}
+
+test("steps mention the new tab, the frame, and switching back", () => {
+  const steps = G.buildSteps(multiTabFlow());
+  assert.ok(steps.includes("Switch to the new tab that opens."));
+  assert.ok(steps.some((s) => /Card name.*inside the "Payment form" frame\)\.$/.test(s)));
+  assert.ok(steps.includes("Switch back to the previous tab."));
+});
+
+test("Playwright follows the new tab and targets the iframe", () => {
+  const code = G.buildPlaywright(multiTabFlow());
+  assert.match(code, /async \(\{ page, context \}\)/);
+  assert.match(code, /const page2Promise = context\.waitForEvent\('page'\);\n  await page\.getByRole\("link", \{ name: "Pay with Provider" \}\)\.click\(\);\n  const page2 = await page2Promise;/);
+  assert.match(code, /page2\.frameLocator\('iframe\[name="payframe"\]'\)\.getByLabel\("Card name"\)\.fill\("Ada"\)/);
+  assert.match(code, /await page2\.getByRole\("button", \{ name: "Confirm" \}\)\.click\(\);/);
+  assert.match(code, /await page\.bringToFront\(\);\n  await page\.getByRole\("button", \{ name: "Done" \}\)\.click\(\);/);
+});
+
+test("single-tab Playwright output is unchanged (no context fixture)", () => {
+  const code = G.buildPlaywright(loginFlow());
+  assert.match(code, /async \(\{ page \}\)/);
+  assert.doesNotMatch(code, /context|bringToFront|frameLocator/);
+});
+
+test("Cypress visits the new tab's URL and reaches into the iframe", () => {
+  const code = G.buildCypress(multiTabFlow());
+  assert.match(code, /cy\.visit\("https:\/\/pay\.example\.net\/checkout"\);/);
+  assert.match(code, /cy\.get\('iframe\[name="payframe"\]'\)\.its\('0\.contentDocument\.body'\)\.should\('not\.be\.empty'\)\.then\(cy\.wrap\)\.find\('\[name="cardname"\]'\)\.type\("Ada"\)/);
+  assert.match(code, /Switched back to the earlier tab\.\n    cy\.visit\("https:\/\/shop\.example\.com\/cart"\);/);
+});

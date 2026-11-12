@@ -194,7 +194,8 @@ A recording can only produce cases for pages you actually visited. To draft the
 cases you'd otherwise hand-write — use **✨ AI suggest more cases**.
 
 Setup (⚙ settings → AI suggestions): paste your **Anthropic API key**, optionally
-set a **Model** (default `claude-sonnet-4-6`), and write a short **App description**
+set a **Model** (default `claude-opus-5-5`; type `claude-sonnet-5-5` for a cheaper
+option), and write a short **App description**
 of what to test. Then press the button: Claude returns a batch of test cases that
 land in the normal review list (tagged blue **ai**), where you edit, untick, and
 add the ones you want. It's told which scenarios you already have, so it aims for
@@ -232,13 +233,41 @@ Review the selectors before running — the recorder picks the best available
 locator, but a page with poor markup may need a human tweak. The export reflects the
 **current recording session** (the raw actions), not the saved test-case table.
 
-## One recording = one tab
+## Which tabs and frames are recorded
 
-A recording is locked to the exact tab you press Start on. The recorder runs in
-every tab, but the extension only accepts actions from the tab where recording
-began — so having other tabs open (or clicking around in them) won't leak steps
-into your test. Note: a flow that opens a brand-new tab won't capture actions in
-that new tab; keep the flow within the tab you started on.
+A recording starts on the tab you press Start on. Unrelated tabs you have open
+(or click around in) are ignored, so they won't leak steps into your test.
+
+- **New tabs and pop-ups.** If the flow opens a new tab or pop-up window (an
+  "open in new tab" link, an OAuth sign-in, a payment pop-up), that tab joins the
+  recording automatically. The steps read "Switch to the new tab that opens" and
+  "Switch back to the previous tab".
+- **iframes.** Actions inside embedded frames (payment widgets, embedded forms)
+  are recorded too, and the step notes which frame they happened in.
+- **Code export.** Playwright follows new tabs with `context.waitForEvent('page')`
+  and targets frames with `frameLocator(...)`. Cypress can drive only one tab, so
+  it visits the new tab's URL directly. It can reach into same-origin iframes only.
+
+## Replay a recording
+
+Press **▶ Replay** in the "Last recording" bar to re-run the recorded steps in the
+current tab. The extension opens the first page, then fills fields, clicks, picks
+options and checks for the success messages that appeared while you recorded. It
+follows new tabs and iframes the same way the recorder did. A panel shows each
+step live, marked passed, warning or failed, and you can **Stop** at any time.
+
+When you add a batch, the positive case keeps its recorded flow. Open that case
+(▸) and press **▶ Replay this case**. When the replay finishes, the case's
+**Status** becomes Pass or Fail, the **Actual Result** column gets a summary
+(which step failed and why), and a screenshot of the final screen is attached.
+
+- Password and other secret values are never stored. If the flow has one, type it
+  in the replay box. It is used for that run only.
+- Replay finds elements the way the code export does: test id, id, name, label,
+  then visible text. A page that changed a lot since the recording may need a fresh
+  recording.
+- A replay can't start while recording, and recording can't start while a replay
+  runs.
 
 ## Feature-by-feature, no duplicates, screenshots-to-cases
 

@@ -54,7 +54,7 @@
         <span id="keyStatus" class="key-status"></span>
       </label>
       <label class="block-setting">Model
-        <input id="aiModel" type="text" placeholder="claude-sonnet-4-6" />
+        <input id="aiModel" type="text" placeholder="claude-opus-5-5" />
       </label>
       <label class="block-setting">App description <span class="muted">(what to test)</span>
         <textarea id="appContext" rows="3" placeholder="e.g. Admin portal for a fintech: dashboard with transaction stats and balances; transactions page with search, filter, approve/reject; pool & operating accounts; user management."></textarea>
@@ -79,9 +79,21 @@
     </section>
 
     <section id="codeBar" class="code-bar" hidden>
-      <span class="code-bar-label">Export last recording as test:</span>
+      <span class="code-bar-label">Last recording:</span>
+      <button id="replayBtn" class="btn ghost tiny" title="Re-run the recorded steps in this tab">▶ Replay</button>
       <button id="pwBtn" class="btn ghost tiny">Playwright</button>
       <button id="cyBtn" class="btn ghost tiny">Cypress</button>
+      <input id="replaySecret" class="replay-secret" type="password" autocomplete="off"
+        placeholder="Password for replay (not saved)" hidden />
+    </section>
+
+    <section id="replayPanel" class="replay-panel" hidden>
+      <div class="replay-head">
+        <span id="replayTitle" class="replay-title">Replaying…</span>
+        <button id="replayStopBtn" class="btn ghost tiny">Stop</button>
+      </div>
+      <div class="replay-bar"><span id="replayProgress"></span></div>
+      <ol id="replayLog" class="replay-log"></ol>
     </section>
 
     <section id="batch" class="batch" hidden>

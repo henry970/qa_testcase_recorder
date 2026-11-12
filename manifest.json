@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "QA TestCase Recorder",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Records the actions you perform on a page and turns each session into an editable QA test case you can export to CSV.",
   "permissions": [
     "storage",
@@ -34,7 +34,7 @@
         "content.js"
       ],
       "run_at": "document_idle",
-      "all_frames": false
+      "all_frames": true
     }
   ],
   "icons": {
