@@ -271,9 +271,6 @@ textarea { resize: vertical; font-family: var(--mono); font-size: 12px; line-hei
 .kind.element { color: #a78bfa; border: 1px solid #a78bfa; }
 
 /* ---- replay ------------------------------------------------------------- */
-.code-bar { flex-wrap: wrap; }
-.replay-secret { flex-basis: 100%; margin-top: 6px; background: var(--panel-2); color: var(--text);
-  border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; font-size: 12px; }
 .replay-panel { padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--border); }
 .replay-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .replay-title { font-size: 12px; font-weight: 600; }

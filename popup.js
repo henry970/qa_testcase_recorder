@@ -8,7 +8,7 @@ const els = {
   aiBtn: $("aiBtn"), apiKey: $("apiKey"), showKey: $("showKey"), keyStatus: $("keyStatus"), aiModel: $("aiModel"), appContext: $("appContext"), aiUseShots: $("aiUseShots"),
   recordBtn: $("recordBtn"), recordLabel: document.querySelector(".record-label"), pauseBtn: $("pauseBtn"), statusLine: $("statusLine"),
   batch: $("batch"), batchInfo: $("batchInfo"), batchShots: $("batchShots"), recordedFlow: $("recordedFlow"), batchList: $("batchList"),
-  codeBar: $("codeBar"), pwBtn: $("pwBtn"), cyBtn: $("cyBtn"), replayBtn: $("replayBtn"), replaySecret: $("replaySecret"),
+  codeBar: $("codeBar"), pwBtn: $("pwBtn"), cyBtn: $("cyBtn"),
   replayPanel: $("replayPanel"), replayTitle: $("replayTitle"), replayStopBtn: $("replayStopBtn"), replayProgress: $("replayProgress"), replayLog: $("replayLog"),
   discardBtn: $("discardBtn"), addBtn: $("addBtn"),
   savedCount: $("savedCount"), savedList: $("savedList"), emptyState: $("emptyState"), clearBtn: $("clearBtn"), screensBtn: $("screensBtn"),
@@ -778,8 +778,6 @@ async function updateCodeBar() {
   const { lastEvents = [], events = [] } = await chrome.storage.local.get(["lastEvents", "events"]);
   const src = (events && events.length) ? events : lastEvents;
   els.codeBar.hidden = !(src && src.length);
-  els.replaySecret.hidden = !hasSensitive(lastEvents);
-  els.replayBtn.disabled = !(lastEvents && lastEvents.length);
 }
 
 // ---- replay --------------------------------------------------------------
@@ -832,11 +830,6 @@ function renderReplay(rs) {
   els.replayLog.scrollTop = els.replayLog.scrollHeight;
 }
 
-els.replayBtn.addEventListener("click", async () => {
-  const { lastEvents = [] } = await chrome.storage.local.get("lastEvents");
-  if (!lastEvents.length) { els.statusLine.textContent = "No recording to replay yet — record a flow first."; return; }
-  startReplay(lastEvents, els.replaySecret.value, null, "last recording");
-});
 els.replayStopBtn.addEventListener("click", async () => {
   if (replayActive) { await chrome.runtime.sendMessage({ type: "REPLAY_STOP" }); return; }
   await save({ replayState: null });

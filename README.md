@@ -250,14 +250,14 @@ A recording starts on the tab you press Start on. Unrelated tabs you have open
 
 ## Replay a recording
 
-Press **▶ Replay** in the "Last recording" bar to re-run the recorded steps in the
-current tab. The extension opens the first page, then fills fields, clicks, picks
-options and checks for the success messages that appeared while you recorded. It
-follows new tabs and iframes the same way the recorder did. A panel shows each
-step live, marked passed, warning or failed, and you can **Stop** at any time.
-
 When you add a batch, the positive case keeps its recorded flow. Open that case
-(▸) and press **▶ Replay this case**. When the replay finishes, the case's
+(▸) and press **▶ Replay this case** to re-run it in the current tab. The
+extension opens the first page, then fills fields, clicks, picks options and
+checks for the success messages that appeared while you recorded. It follows new
+tabs and iframes the same way the recorder did. A panel shows each step live,
+marked passed, warning or failed, and you can **Stop** at any time.
+
+When the replay finishes, the case's
 **Status** becomes Pass or Fail, the **Actual Result** column gets a summary
 (which step failed and why), and a screenshot of the final screen is attached.
 
